@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ATS Resume Tailor</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body { font-family: Arial; margin: 20px; max-width: 900px; }
+    textarea { width: 100%; height: 150px; margin-bottom: 10px; }
+    button { padding: 10px 20px; cursor: pointer; }
+    #output { white-space: pre-wrap; margin-top: 20px; border-top: 1px solid #ccc; padding-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>ATS Resume Tailor</h1>
+
+  <h3>Your Resume (stored locally)</h3>
+  <textarea id="resume"></textarea>
+  <button onclick="saveResume()">Save Resume</button>
+
+  <h3>Job Description</h3>
+  <textarea id="jd"></textarea>
+
+  <button onclick="analyze()">Analyze & Tailor</button>
+
+  <div id="output"></div>
+
+<script>
+const OPENAI_API_KEY = "PASTE_YOUR_KEY_HERE";
+
+window.onload = () => {
+  const saved = localStorage.getItem("resume");
+  if (saved) document.getElementById("resume").value = saved;
+};
+
+function saveResume() {
+  localStorage.setItem("resume", document.getElementById("resume").value);
+  alert("Resume saved locally");
+}
+
+async function analyze() {
+  const resume = document.getElementById("resume").value;
+  const jd = document.getElementById("jd").value;
+
+  const prompt = `
+You are an expert resume optimizer.
+
+STEP 1: Extract key skills and keywords from the job description.
+STEP 2: Compare with the resume.
+STEP 3: Identify gaps and missing keywords.
+STEP 4: Rewrite ONLY necessary bullet points to better match the job.
+
+Rules:
+- Do NOT rewrite entire resume
+- Keep original tone
+- Add metrics where possible
+- Avoid keyword stuffing
+
+Return:
+1. Missing Keywords
+2. Suggested Bullet Edits
+3. Improved Resume Section
+
+RESUME:
+${resume}
+
+JOB DESCRIPTION:
+${jd}
+`;
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENAI_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+
+  const data = await response.json();
+  const output = data.choices[0].message.content;
+
+  document.getElementById("output").innerHTML = marked.parse(output);
+}
+</script>
+</body>
+</html>
