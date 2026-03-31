@@ -4,7 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ATS Resume Tailor</title>
+  <!-- marked: render AI summary markdown -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- pdf.js: text extraction from uploaded PDFs (fallback path) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- PizZip: unpack and repack DOCX (ZIP) files -->
+  <script src="https://unpkg.com/pizzip@3.1.4/dist/pizzip.js"></script>
   <style>
     :root {
       color-scheme: light;
@@ -12,9 +17,7 @@
       line-height: 1.5;
     }
 
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
 
     body {
       margin: 0;
@@ -28,15 +31,17 @@
       padding: 32px 20px 48px;
     }
 
-    h1,
-    h2,
-    p {
-      margin-top: 0;
-    }
+    h1, h2, p { margin-top: 0; }
 
     .intro {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
       margin-bottom: 24px;
     }
+
+    .intro-text { flex: 1; }
 
     .card {
       background: #ffffff;
@@ -47,10 +52,7 @@
       margin-bottom: 20px;
     }
 
-    .stack {
-      display: grid;
-      gap: 16px;
-    }
+    .stack { display: grid; gap: 16px; }
 
     label {
       display: block;
@@ -58,14 +60,9 @@
       margin-bottom: 8px;
     }
 
-    input,
-    textarea,
-    button {
-      font: inherit;
-    }
+    input, textarea, button { font: inherit; }
 
-    input,
-    textarea {
+    input, textarea {
       width: 100%;
       border: 1px solid #c7d2e3;
       border-radius: 10px;
@@ -76,6 +73,54 @@
     textarea {
       min-height: 180px;
       resize: vertical;
+    }
+
+    .upload-zone {
+      border: 2px dashed #c7d2e3;
+      border-radius: 10px;
+      padding: 24px;
+      text-align: center;
+      cursor: pointer;
+      background: #f9fafb;
+      transition: border-color 0.15s, background 0.15s;
+      position: relative;
+    }
+
+    .upload-zone:hover,
+    .upload-zone.drag-over {
+      border-color: #2563eb;
+      background: #eff6ff;
+    }
+
+    .upload-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      border: 0;
+    }
+
+    .upload-icon { font-size: 2rem; line-height: 1; margin-bottom: 8px; }
+    .upload-label { font-weight: 700; color: #2563eb; }
+    .upload-hint { font-size: 0.9rem; color: #6b7280; margin-top: 4px; }
+
+    .or-divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #9ca3af;
+      font-size: 0.9rem;
+    }
+
+    .or-divider::before,
+    .or-divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: #e5e7eb;
     }
 
     .button-row {
@@ -115,57 +160,173 @@
       font-weight: 700;
     }
 
-    #status.error {
-      color: #b91c1c;
+    #status.error { color: #b91c1c; }
+    #status.success { color: #047857; }
+
+    /* Settings panel */
+    .settings-toggle {
+      background: none;
+      border: none;
+      color: #6b7280;
+      font-size: 0.9rem;
+      padding: 4px 8px;
+      border-radius: 8px;
+      font-weight: 400;
+      cursor: pointer;
     }
 
-    #status.success {
-      color: #047857;
+    .settings-toggle:hover { background: #f3f4f6; color: #1f2937; }
+
+    /* File pill */
+    .file-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 0.9rem;
+      color: #1d4ed8;
+      margin-top: 10px;
     }
 
-    #output {
-      min-height: 120px;
+    .file-pill button {
+      background: none;
+      color: #6b7280;
+      padding: 0;
+      font-size: 1rem;
+      line-height: 1;
+      font-weight: 400;
+    }
+
+    .file-pill button:hover { color: #b91c1c; }
+
+    /* Output section */
+    .output-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .output-header h2 { margin: 0; }
+
+    #summaryText {
+      color: #374151;
+      margin-bottom: 16px;
+      line-height: 1.6;
+    }
+
+    #summaryText:empty { display: none; }
+
+    .diff-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 12px;
+    }
+
+    .diff-item {
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      overflow: hidden;
+      font-size: 0.95rem;
+    }
+
+    .diff-original {
+      background: #fef2f2;
+      color: #991b1b;
+      padding: 10px 14px;
+      text-decoration: line-through;
+      opacity: 0.8;
+    }
+
+    .diff-replacement {
+      background: #f0fdf4;
+      color: #166534;
+      padding: 10px 14px;
+    }
+
+    #noChanges {
+      color: #6b7280;
+      font-style: italic;
+      display: none;
     }
 
     #output:empty::before {
-      content: "Your analysis will appear here.";
+      content: "Your resume analysis will appear here.";
       color: #6b7280;
     }
 
-    #output h1,
-    #output h2,
-    #output h3 {
-      margin-top: 1.25em;
+    .pdf-result {
+      white-space: pre-wrap;
+      font-size: 0.95rem;
+      color: #374151;
+    }
+
+    .pdf-notice {
+      background: #fef9c3;
+      border: 1px solid #fde047;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.9rem;
+      color: #713f12;
+      margin-bottom: 12px;
     }
   </style>
 </head>
 <body>
   <main>
     <section class="intro">
-      <h1>ATS Resume Tailor</h1>
-      <p>Paste your resume and a job description, then send both to your backend for a targeted rewrite with missing keywords and stronger bullet suggestions.</p>
+      <div class="intro-text">
+        <h1>ATS Resume Tailor</h1>
+        <p>Upload your <strong>.docx</strong> resume for a full formatting-preserving round-trip — the AI edits your document and returns a download-ready <strong>.docx</strong> file. PDF uploads are also supported for text-based analysis.</p>
+      </div>
+      <button class="settings-toggle" id="settingsToggle" type="button">⚙ Settings</button>
     </section>
 
-    <section class="card stack">
+    <!-- Settings panel -->
+    <section class="card" id="settingsPanel" style="display:none;">
       <div>
-        <label for="apiUrl">Backend Endpoint</label>
+        <label for="apiUrl">Backend Endpoint (Netlify Function URL)</label>
         <input id="apiUrl" type="url" placeholder="https://your-site.netlify.app/.netlify/functions/analyze" />
-        <p class="hint">On Netlify, use <code>/.netlify/functions/analyze</code> on your deploy URL. GitHub Pages cannot host this; paste your Netlify function URL here. Stored in your browser.</p>
+        <p class="hint">Paste your Netlify function URL here once. It is saved in your browser.</p>
       </div>
     </section>
 
+    <!-- Resume upload -->
     <section class="card stack">
       <div>
-        <label for="resume">Your Resume</label>
-        <textarea id="resume" placeholder="Paste your current resume here."></textarea>
+        <label>Your Resume</label>
+        <div class="upload-zone" id="uploadZone">
+          <input type="file" id="resumeFile" accept=".docx,.pdf" />
+          <div class="upload-icon">📄</div>
+          <div class="upload-label">Click or drag your resume here</div>
+          <div class="upload-hint">.docx recommended (formatting preserved) — .pdf also accepted</div>
+        </div>
+        <div id="filePill" style="display:none;" class="file-pill">
+          <span id="fileName"></span>
+          <button type="button" id="clearFile" title="Remove file">✕</button>
+        </div>
+      </div>
+
+      <div class="or-divider">or paste plain text</div>
+
+      <div>
+        <textarea id="resume" placeholder="Paste resume text here — formatting will not be preserved for text input."></textarea>
       </div>
 
       <div class="button-row">
-        <button id="saveResumeButton" type="button" class="secondary">Save Resume Locally</button>
+        <button id="saveResumeButton" type="button" class="secondary">Save Text Locally</button>
       </div>
-      <p class="hint">Your saved resume stays in this browser via local storage.</p>
+      <p class="hint">Saved text stays in this browser via local storage. Uploaded files are not saved.</p>
     </section>
 
+    <!-- Job description -->
     <section class="card stack">
       <div>
         <label for="jd">Job Description</label>
@@ -179,93 +340,255 @@
       <div id="status" aria-live="polite"></div>
     </section>
 
+    <!-- Output -->
     <section class="card">
-      <h2>Analysis Output</h2>
+      <div class="output-header">
+        <h2>Analysis</h2>
+        <div class="button-row">
+          <button id="copyButton" type="button" class="secondary" style="display:none;">Copy Edited Text</button>
+          <button id="downloadButton" type="button" style="display:none;">Download .docx</button>
+        </div>
+      </div>
+      <div id="summaryText"></div>
       <div id="output"></div>
+      <p id="noChanges">No changes were needed — your resume already matches this job description well.</p>
     </section>
   </main>
 
   <script>
+    // ─── Constants ──────────────────────────────────────────────────────────────
+    const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const XML_NS = "http://www.w3.org/XML/1998/namespace";
+
     const STORAGE_KEYS = {
       apiUrl: "resume-tuner-api-url",
       resume: "resume-tuner-resume"
     };
 
-    const elements = {
-      apiUrl: document.getElementById("apiUrl"),
-      resume: document.getElementById("resume"),
-      jd: document.getElementById("jd"),
-      analyzeButton: document.getElementById("analyzeButton"),
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+    // ─── State ───────────────────────────────────────────────────────────────────
+    // uploadMode: 'text' | 'docx' | 'pdf'
+    let uploadMode = "text";
+    let docxBuffer = null;      // original ArrayBuffer of the uploaded .docx
+    let docxParagraphs = [];    // paragraph strings extracted from the DOCX XML
+    let lastChanges = [];       // last received changes array (for PDF copy path)
+    let lastParagraphs = [];    // text paragraphs for PDF/text path
+
+    // ─── Element refs ────────────────────────────────────────────────────────────
+    const el = {
+      apiUrl:           document.getElementById("apiUrl"),
+      settingsToggle:   document.getElementById("settingsToggle"),
+      settingsPanel:    document.getElementById("settingsPanel"),
+      resumeFile:       document.getElementById("resumeFile"),
+      uploadZone:       document.getElementById("uploadZone"),
+      filePill:         document.getElementById("filePill"),
+      fileName:         document.getElementById("fileName"),
+      clearFile:        document.getElementById("clearFile"),
+      resume:           document.getElementById("resume"),
       saveResumeButton: document.getElementById("saveResumeButton"),
-      clearOutputButton: document.getElementById("clearOutputButton"),
-      output: document.getElementById("output"),
-      status: document.getElementById("status")
+      jd:               document.getElementById("jd"),
+      analyzeButton:    document.getElementById("analyzeButton"),
+      clearOutputButton:document.getElementById("clearOutputButton"),
+      status:           document.getElementById("status"),
+      summaryText:      document.getElementById("summaryText"),
+      output:           document.getElementById("output"),
+      noChanges:        document.getElementById("noChanges"),
+      copyButton:       document.getElementById("copyButton"),
+      downloadButton:   document.getElementById("downloadButton")
     };
 
-    initializeForm();
-
-    elements.saveResumeButton.addEventListener("click", saveResume);
-    elements.analyzeButton.addEventListener("click", analyze);
-    elements.clearOutputButton.addEventListener("click", clearOutput);
-    elements.apiUrl.addEventListener("change", persistApiUrl);
-
-    function initializeForm() {
+    // ─── Init ────────────────────────────────────────────────────────────────────
+    (function init() {
       const savedResume = localStorage.getItem(STORAGE_KEYS.resume);
       const savedApiUrl = localStorage.getItem(STORAGE_KEYS.apiUrl);
+      if (savedResume) el.resume.value = savedResume;
+      el.apiUrl.value = savedApiUrl || "";
+    })();
 
-      if (savedResume) {
-        elements.resume.value = savedResume;
+    // ─── Settings toggle ─────────────────────────────────────────────────────────
+    el.settingsToggle.addEventListener("click", () => {
+      const isHidden = el.settingsPanel.style.display === "none";
+      el.settingsPanel.style.display = isHidden ? "block" : "none";
+      el.settingsToggle.textContent = isHidden ? "✕ Close Settings" : "⚙ Settings";
+    });
+
+    el.apiUrl.addEventListener("change", () => {
+      localStorage.setItem(STORAGE_KEYS.apiUrl, el.apiUrl.value.trim());
+    });
+
+    // ─── Save resume text ────────────────────────────────────────────────────────
+    el.saveResumeButton.addEventListener("click", () => {
+      localStorage.setItem(STORAGE_KEYS.resume, el.resume.value.trim());
+      setStatus("Resume text saved locally.", "success");
+    });
+
+    // ─── File upload ─────────────────────────────────────────────────────────────
+    el.resumeFile.addEventListener("change", () => {
+      const file = el.resumeFile.files[0];
+      if (file) handleFileSelect(file);
+    });
+
+    el.clearFile.addEventListener("click", resetFileUpload);
+
+    el.uploadZone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      el.uploadZone.classList.add("drag-over");
+    });
+    el.uploadZone.addEventListener("dragleave", () => {
+      el.uploadZone.classList.remove("drag-over");
+    });
+    el.uploadZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      el.uploadZone.classList.remove("drag-over");
+      const file = e.dataTransfer.files[0];
+      if (file) {
+        handleFileSelect(file);
+      } else {
+        setStatus("Could not read the dropped file.", "error");
       }
+    });
 
-      // GitHub Pages is static-only; default to blank unless user previously set it.
-      elements.apiUrl.value = savedApiUrl || "";
+    function handleFileSelect(file) {
+      const isDocx =
+        file.name.toLowerCase().endsWith(".docx") ||
+        file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+
+      if (isDocx) {
+        handleDocxFile(file);
+      } else if (isPdf) {
+        handlePdfFile(file);
+      } else {
+        setStatus("Please upload a .docx or .pdf file.", "error");
+      }
     }
 
-    function setStatus(message, type = "") {
-      elements.status.textContent = message;
-      elements.status.className = type;
+    // ─── DOCX handling ───────────────────────────────────────────────────────────
+    async function handleDocxFile(file) {
+      setStatus("Reading .docx file...");
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        docxBuffer = arrayBuffer;
+
+        // Unpack and parse document.xml
+        const zip = new PizZip(arrayBuffer);
+        const xmlText = zip.file("word/document.xml").asText();
+        const xmlDoc = new DOMParser().parseFromString(xmlText, "application/xml");
+
+        // Extract paragraph texts directly from <w:p> elements
+        const paras = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "p"));
+        docxParagraphs = paras.map((p) =>
+          Array.from(p.getElementsByTagNameNS(W_NS, "t"))
+            .map((t) => t.textContent)
+            .join("")
+        );
+
+        // Show a plain-text preview so the user can confirm content was read
+        el.resume.value = docxParagraphs.filter((p) => p.trim()).join("\n");
+        uploadMode = "docx";
+
+        showFilePill(file.name);
+        setStatus(
+          `Loaded ${docxParagraphs.length} paragraphs from "${file.name}".`,
+          "success"
+        );
+      } catch (err) {
+        resetFileUpload();
+        setStatus("Could not read the .docx file. Make sure it is a valid Word document.", "error");
+        console.error(err);
+      }
     }
 
-    function saveResume() {
-      localStorage.setItem(STORAGE_KEYS.resume, elements.resume.value.trim());
-      setStatus("Resume saved locally.", "success");
+    // ─── PDF handling (text-extraction fallback) ─────────────────────────────────
+    async function handlePdfFile(file) {
+      setStatus("Extracting text from PDF...");
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const pages = [];
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          pages.push(content.items.map((item) => item.str).join(" "));
+        }
+
+        const fullText = pages.join("\n\n");
+        el.resume.value = fullText;
+        uploadMode = "pdf";
+
+        showFilePill(file.name);
+        setStatus(
+          `PDF loaded: ${pdf.numPages} page${pdf.numPages !== 1 ? "s" : ""} — text extracted. Formatting will not be preserved.`,
+          "success"
+        );
+      } catch (err) {
+        resetFileUpload();
+        setStatus("Could not read the PDF. Try pasting the text manually.", "error");
+        console.error(err);
+      }
     }
 
-    function persistApiUrl() {
-      localStorage.setItem(STORAGE_KEYS.apiUrl, elements.apiUrl.value.trim());
+    function showFilePill(name) {
+      el.fileName.textContent = name;
+      el.filePill.style.display = "inline-flex";
     }
 
-    function clearOutput() {
-      elements.output.innerHTML = "";
+    function resetFileUpload() {
+      docxBuffer = null;
+      docxParagraphs = [];
+      uploadMode = "text";
+      el.resumeFile.value = "";
+      el.filePill.style.display = "none";
+      el.resume.value = localStorage.getItem(STORAGE_KEYS.resume) || "";
       setStatus("");
     }
 
+    // ─── Analyze ─────────────────────────────────────────────────────────────────
+    el.analyzeButton.addEventListener("click", analyze);
+    el.clearOutputButton.addEventListener("click", clearOutput);
+
     async function analyze() {
-      const apiUrl = elements.apiUrl.value.trim();
-      const resume = elements.resume.value.trim();
-      const jd = elements.jd.value.trim();
+      const apiUrl = el.apiUrl.value.trim();
+      const jd = el.jd.value.trim();
 
       if (!apiUrl) {
-        setStatus("Add a backend endpoint before running analysis.", "error");
+        setStatus("Open Settings (top right) and paste your Netlify function URL.", "error");
+        el.settingsPanel.style.display = "block";
+        el.settingsToggle.textContent = "✕ Close Settings";
         return;
       }
 
-      if (!resume || !jd) {
-        setStatus("Both the resume and job description are required.", "error");
+      // Build paragraph list based on upload mode
+      let paragraphs;
+      if (uploadMode === "docx") {
+        paragraphs = docxParagraphs;
+      } else {
+        const text = el.resume.value.trim();
+        if (!text) {
+          setStatus("Add a resume — upload a .docx or .pdf, or paste text.", "error");
+          return;
+        }
+        paragraphs = text.split("\n");
+      }
+
+      if (!jd) {
+        setStatus("Paste a job description before analyzing.", "error");
         return;
       }
 
-      persistApiUrl();
-      elements.analyzeButton.disabled = true;
+      localStorage.setItem(STORAGE_KEYS.apiUrl, apiUrl);
+      el.analyzeButton.disabled = true;
       setStatus("Analyzing resume against the job description...");
+      clearOutput(false);
 
       try {
         const response = await fetch(apiUrl, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ resume, jd })
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paragraphs, jd })
         });
 
         const data = await response.json();
@@ -274,18 +597,172 @@
           throw new Error(data.error || "Analysis failed.");
         }
 
-        elements.output.innerHTML = marked.parse(data.result || "No analysis returned.");
-        setStatus("Analysis complete.", "success");
-      } catch (error) {
-        setStatus(error.message || "Unable to reach the backend.", "error");
+        const { changes = [], summary = "" } = data;
+        lastChanges = changes;
+        lastParagraphs = [...paragraphs];
+
+        // Render summary
+        if (summary) {
+          el.summaryText.textContent = summary;
+        }
+
+        if (changes.length === 0) {
+          el.noChanges.style.display = "block";
+          setStatus("Analysis complete — no changes needed.", "success");
+          return;
+        }
+
+        // Render diff list
+        if (uploadMode === "docx") {
+          renderDocxDiff(changes);
+          el.downloadButton.style.display = "inline-block";
+        } else {
+          renderTextResult(paragraphs, changes);
+          el.copyButton.style.display = "inline-block";
+        }
+
+        setStatus(`Analysis complete — ${changes.length} change${changes.length !== 1 ? "s" : ""} suggested.`, "success");
+      } catch (err) {
+        setStatus(err.message || "Could not reach the backend.", "error");
       } finally {
-        elements.analyzeButton.disabled = false;
+        el.analyzeButton.disabled = false;
       }
+    }
+
+    // ─── Output rendering ────────────────────────────────────────────────────────
+
+    function renderDocxDiff(changes) {
+      const ul = document.createElement("ul");
+      ul.className = "diff-list";
+
+      for (const change of changes) {
+        const li = document.createElement("li");
+        li.className = "diff-item";
+
+        const orig = document.createElement("div");
+        orig.className = "diff-original";
+        orig.textContent = change.original;
+
+        const repl = document.createElement("div");
+        repl.className = "diff-replacement";
+        repl.textContent = change.replacement;
+
+        li.appendChild(orig);
+        li.appendChild(repl);
+        ul.appendChild(li);
+      }
+
+      el.output.appendChild(ul);
+    }
+
+    function renderTextResult(paragraphs, changes) {
+      // Build a notice that formatting is not preserved for PDF/text mode
+      const notice = document.createElement("div");
+      notice.className = "pdf-notice";
+      notice.textContent =
+        "PDF/text mode: formatting is not preserved. Copy the edited text below and paste it into your original document.";
+      el.output.appendChild(notice);
+
+      // Apply changes to a copy of the paragraph array
+      const edited = [...paragraphs];
+      for (const change of changes) {
+        if (change.index >= 0 && change.index < edited.length) {
+          edited[change.index] = change.replacement;
+        }
+      }
+
+      const pre = document.createElement("pre");
+      pre.className = "pdf-result";
+      pre.textContent = edited.filter((p) => p.trim()).join("\n");
+      el.output.appendChild(pre);
+    }
+
+    function clearOutput(resetStatus = true) {
+      el.output.innerHTML = "";
+      el.summaryText.textContent = "";
+      el.noChanges.style.display = "none";
+      el.copyButton.style.display = "none";
+      el.downloadButton.style.display = "none";
+      lastChanges = [];
+      if (resetStatus) setStatus("");
+    }
+
+    // ─── Copy button (PDF/text path) ─────────────────────────────────────────────
+    el.copyButton.addEventListener("click", () => {
+      const pre = el.output.querySelector(".pdf-result");
+      if (!pre) return;
+      navigator.clipboard.writeText(pre.textContent).then(() => {
+        el.copyButton.textContent = "Copied!";
+        setTimeout(() => (el.copyButton.textContent = "Copy Edited Text"), 2000);
+      });
+    });
+
+    // ─── Download .docx (DOCX path) ──────────────────────────────────────────────
+    el.downloadButton.addEventListener("click", () => {
+      if (!docxBuffer || lastChanges.length === 0) return;
+      applyAndDownloadDocx(docxBuffer, lastChanges);
+    });
+
+    function applyAndDownloadDocx(arrayBuffer, changes) {
+      try {
+        const zip = new PizZip(arrayBuffer);
+        const xmlText = zip.file("word/document.xml").asText();
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlText, "application/xml");
+
+        const allParas = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "p"));
+
+        for (const change of changes) {
+          const para = allParas[change.index];
+          if (!para) continue;
+
+          // Remove all existing run (<w:r>) elements — preserve <w:pPr> and other non-run nodes
+          Array.from(para.getElementsByTagNameNS(W_NS, "r")).forEach((r) =>
+            r.parentNode.removeChild(r)
+          );
+
+          // Create a new run with the replacement text
+          const newRun = xmlDoc.createElementNS(W_NS, "w:r");
+          const newT = xmlDoc.createElementNS(W_NS, "w:t");
+          // xml:space="preserve" prevents XML parsers from trimming leading/trailing spaces
+          newT.setAttributeNS(XML_NS, "xml:space", "preserve");
+          newT.textContent = change.replacement;
+          newRun.appendChild(newT);
+          para.appendChild(newRun);
+        }
+
+        // Serialize the modified XML back to a string
+        const serializer = new XMLSerializer();
+        const newXmlText = serializer.serializeToString(xmlDoc);
+
+        // Replace document.xml in the ZIP and generate the output blob
+        zip.file("word/document.xml", newXmlText);
+        const blob = zip.generate({
+          type: "blob",
+          mimeType:
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        });
+
+        // Trigger browser download
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "tailored-resume.docx";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      } catch (err) {
+        setStatus("Failed to generate the .docx file: " + err.message, "error");
+        console.error(err);
+      }
+    }
+
+    // ─── Utilities ───────────────────────────────────────────────────────────────
+    function setStatus(message, type = "") {
+      el.status.textContent = message;
+      el.status.className = type;
     }
   </script>
 </body>
 </html>
-
-
-
-

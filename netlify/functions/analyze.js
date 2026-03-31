@@ -1,33 +1,33 @@
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const MODEL = "gpt-4o-mini";
 
-function buildPrompt(resume, jd) {
-  return `
-You are an expert resume optimizer.
+function buildPrompt(paragraphs, jd) {
+  const numberedList = paragraphs.map((p, i) => `${i}: ${p}`).join("\n");
 
-STEP 1: Extract the most important skills, tools, and keywords from the job description.
-STEP 2: Compare those requirements against the resume.
-STEP 3: Identify meaningful gaps or missing keywords.
-STEP 4: Rewrite only the specific bullet points or lines that need improvement.
+  return `You are an expert resume optimizer. Analyze the numbered resume paragraphs below against the job description, then return a JSON object identifying targeted improvements.
 
-Rules:
-- Do not rewrite the entire resume
-- Keep the candidate's tone and experience level realistic
-- Add metrics only when they are implied or already supported by the resume
-- Avoid keyword stuffing
-- Keep suggestions concise and usable
-
-Return the response in markdown with these sections:
-1. Missing Keywords
-2. Suggested Bullet Edits
-3. Improved Resume Section
-
-RESUME:
-${resume}
+RESUME PARAGRAPHS (0-indexed):
+${numberedList}
 
 JOB DESCRIPTION:
 ${jd}
-`.trim();
+
+Rules:
+- Only change bullet points and summary lines — never change contact info, section headings, company names, job titles, or date ranges.
+- Keep all replacements realistic and grounded in what the resume already states.
+- Add metrics only when clearly implied by existing content.
+- Avoid keyword stuffing. Make every change purposeful.
+- Keep replacements concise — match the length and style of the original line.
+
+Return ONLY a JSON object with exactly these two fields:
+{
+  "summary": "2–3 sentence plain-English description of what was changed and why.",
+  "changes": [
+    { "index": <integer>, "original": "<exact original text>", "replacement": "<improved text>" }
+  ]
+}
+
+If no changes are needed, return an empty changes array. Do not include any text outside the JSON object.`.trim();
 }
 
 function corsHeaders() {
@@ -65,13 +65,21 @@ exports.handler = async (event) => {
     };
   }
 
-  const { resume, jd } = parsed;
+  const { paragraphs, jd } = parsed;
 
-  if (!resume || !jd) {
+  if (!paragraphs || !Array.isArray(paragraphs) || paragraphs.length === 0) {
     return {
       statusCode: 400,
       headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Both resume and jd are required." })
+      body: JSON.stringify({ error: "paragraphs (array) and jd are required." })
+    };
+  }
+
+  if (!jd) {
+    return {
+      statusCode: 400,
+      headers: { ...baseHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "jd is required." })
     };
   }
 
@@ -92,7 +100,8 @@ exports.handler = async (event) => {
       },
       body: JSON.stringify({
         model: MODEL,
-        messages: [{ role: "user", content: buildPrompt(resume, jd) }]
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: buildPrompt(paragraphs, jd) }]
       })
     });
 
@@ -107,9 +116,9 @@ exports.handler = async (event) => {
       };
     }
 
-    const result = data?.choices?.[0]?.message?.content;
+    const rawContent = data?.choices?.[0]?.message?.content;
 
-    if (!result) {
+    if (!rawContent) {
       return {
         statusCode: 502,
         headers: { ...baseHeaders, "Content-Type": "application/json" },
@@ -117,10 +126,24 @@ exports.handler = async (event) => {
       };
     }
 
+    let result;
+    try {
+      result = JSON.parse(rawContent);
+    } catch {
+      return {
+        statusCode: 502,
+        headers: { ...baseHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ error: "OpenAI returned malformed JSON. Try again." })
+      };
+    }
+
+    const changes = Array.isArray(result.changes) ? result.changes : [];
+    const summary = typeof result.summary === "string" ? result.summary : "";
+
     return {
       statusCode: 200,
       headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ result })
+      body: JSON.stringify({ changes, summary })
     };
   } catch (err) {
     return {
