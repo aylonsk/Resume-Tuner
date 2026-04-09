@@ -6,8 +6,6 @@
   <title>ATS Resume Tailor</title>
   <!-- marked: render AI summary markdown -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <!-- pdf.js: text extraction from uploaded PDFs (fallback path) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <!-- PizZip: unpack and repack DOCX (ZIP) files -->
   <script src="https://unpkg.com/pizzip@3.1.4/dist/pizzip.js"></script>
   <style>
@@ -107,22 +105,6 @@
     .upload-label { font-weight: 700; color: #2563eb; }
     .upload-hint { font-size: 0.9rem; color: #6b7280; margin-top: 4px; }
 
-    .or-divider {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      color: #9ca3af;
-      font-size: 0.9rem;
-    }
-
-    .or-divider::before,
-    .or-divider::after {
-      content: "";
-      flex: 1;
-      height: 1px;
-      background: #e5e7eb;
-    }
-
     .button-row {
       display: flex;
       gap: 12px;
@@ -189,6 +171,16 @@
       font-size: 0.9rem;
       color: #1d4ed8;
       margin-top: 10px;
+    }
+
+    .file-pill .saved-badge {
+      font-size: 0.78rem;
+      background: #dcfce7;
+      color: #166534;
+      border: 1px solid #bbf7d0;
+      border-radius: 5px;
+      padding: 1px 6px;
+      font-weight: 700;
     }
 
     .file-pill button {
@@ -261,22 +253,6 @@
       content: "Your resume analysis will appear here.";
       color: #6b7280;
     }
-
-    .pdf-result {
-      white-space: pre-wrap;
-      font-size: 0.95rem;
-      color: #374151;
-    }
-
-    .pdf-notice {
-      background: #fef9c3;
-      border: 1px solid #fde047;
-      border-radius: 8px;
-      padding: 10px 14px;
-      font-size: 0.9rem;
-      color: #713f12;
-      margin-bottom: 12px;
-    }
   </style>
 </head>
 <body>
@@ -284,9 +260,9 @@
     <section class="intro">
       <div class="intro-text">
         <h1>ATS Resume Tailor</h1>
-        <p>Upload your <strong>.docx</strong> resume for a full formatting-preserving round-trip — the AI edits your document and returns a download-ready <strong>.docx</strong> file. PDF uploads are also supported for text-based analysis.</p>
+        <p>Upload your <strong>.docx</strong> resume and paste a job description. The AI returns targeted edits — then download your tailored resume as a <strong>.docx</strong> file with all formatting preserved.</p>
       </div>
-      <button class="settings-toggle" id="settingsToggle" type="button">⚙ Settings</button>
+      <button class="settings-toggle" id="settingsToggle" type="button">&#9881; Settings</button>
     </section>
 
     <!-- Settings panel -->
@@ -303,27 +279,17 @@
       <div>
         <label>Your Resume</label>
         <div class="upload-zone" id="uploadZone">
-          <input type="file" id="resumeFile" accept=".docx,.pdf" />
-          <div class="upload-icon">📄</div>
-          <div class="upload-label">Click or drag your resume here</div>
-          <div class="upload-hint">.docx recommended (formatting preserved) — .pdf also accepted</div>
+          <input type="file" id="resumeFile" accept=".docx" />
+          <div class="upload-icon">&#128196;</div>
+          <div class="upload-label">Click or drag your .docx resume here</div>
+          <div class="upload-hint">.docx files only &mdash; your resume is automatically saved in this browser</div>
         </div>
         <div id="filePill" style="display:none;" class="file-pill">
           <span id="fileName"></span>
-          <button type="button" id="clearFile" title="Remove file">✕</button>
+          <span class="saved-badge" id="savedBadge" style="display:none;">Saved</span>
+          <button type="button" id="clearFile" title="Remove file">&#x2715;</button>
         </div>
       </div>
-
-      <div class="or-divider">or paste plain text</div>
-
-      <div>
-        <textarea id="resume" placeholder="Paste resume text here — formatting will not be preserved for text input."></textarea>
-      </div>
-
-      <div class="button-row">
-        <button id="saveResumeButton" type="button" class="secondary">Save Text Locally</button>
-      </div>
-      <p class="hint">Saved text stays in this browser via local storage. Uploaded files are not saved.</p>
     </section>
 
     <!-- Job description -->
@@ -345,67 +311,121 @@
       <div class="output-header">
         <h2>Analysis</h2>
         <div class="button-row">
-          <button id="copyButton" type="button" class="secondary" style="display:none;">Copy Edited Text</button>
           <button id="downloadButton" type="button" style="display:none;">Download .docx</button>
         </div>
       </div>
       <div id="summaryText"></div>
       <div id="output"></div>
-      <p id="noChanges">No changes were needed — your resume already matches this job description well.</p>
+      <p id="noChanges">No changes were needed &mdash; your resume already matches this job description well.</p>
     </section>
   </main>
 
   <script>
-    // ─── Constants ──────────────────────────────────────────────────────────────
+    // ─── Constants ───────────────────────────────────────────────────────────────
     const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     const XML_NS = "http://www.w3.org/XML/1998/namespace";
 
     const STORAGE_KEYS = {
-      apiUrl: "resume-tuner-api-url",
-      resume: "resume-tuner-resume"
+      apiUrl: "resume-tuner-api-url"
     };
 
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    // ─── IndexedDB helper ────────────────────────────────────────────────────────
+    const DB = {
+      _db: null,
+
+      open() {
+        if (this._db) return Promise.resolve(this._db);
+        return new Promise((resolve, reject) => {
+          const req = indexedDB.open("resume-tuner", 1);
+          req.onupgradeneeded = (e) => {
+            e.target.result.createObjectStore("files");
+          };
+          req.onsuccess = (e) => {
+            this._db = e.target.result;
+            resolve(this._db);
+          };
+          req.onerror = () => reject(req.error);
+        });
+      },
+
+      async save(name, buffer, paragraphs) {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction("files", "readwrite");
+          tx.objectStore("files").put({ name, buffer, paragraphs }, "docx");
+          tx.oncomplete = resolve;
+          tx.onerror = () => reject(tx.error);
+        });
+      },
+
+      async load() {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+          const req = db.transaction("files", "readonly")
+            .objectStore("files")
+            .get("docx");
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+        });
+      },
+
+      async clear() {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction("files", "readwrite");
+          tx.objectStore("files").delete("docx");
+          tx.oncomplete = resolve;
+          tx.onerror = () => reject(tx.error);
+        });
+      }
+    };
 
     // ─── State ───────────────────────────────────────────────────────────────────
-    // uploadMode: 'text' | 'docx' | 'pdf'
-    let uploadMode = "text";
-    let docxBuffer = null;      // original ArrayBuffer of the uploaded .docx
-    let docxParagraphs = [];    // paragraph strings extracted from the DOCX XML
-    let lastChanges = [];       // last received changes array (for PDF copy path)
-    let lastParagraphs = [];    // text paragraphs for PDF/text path
+    let uploadMode = "none";       // 'none' | 'docx'
+    let docxBuffer = null;         // ArrayBuffer of the loaded .docx
+    let docxParagraphs = [];       // paragraph strings extracted from document.xml
+    let lastChanges = [];
 
     // ─── Element refs ────────────────────────────────────────────────────────────
     const el = {
-      apiUrl:           document.getElementById("apiUrl"),
-      settingsToggle:   document.getElementById("settingsToggle"),
-      settingsPanel:    document.getElementById("settingsPanel"),
-      resumeFile:       document.getElementById("resumeFile"),
-      uploadZone:       document.getElementById("uploadZone"),
-      filePill:         document.getElementById("filePill"),
-      fileName:         document.getElementById("fileName"),
-      clearFile:        document.getElementById("clearFile"),
-      resume:           document.getElementById("resume"),
-      saveResumeButton: document.getElementById("saveResumeButton"),
-      jd:               document.getElementById("jd"),
-      analyzeButton:    document.getElementById("analyzeButton"),
-      clearOutputButton:document.getElementById("clearOutputButton"),
-      status:           document.getElementById("status"),
-      summaryText:      document.getElementById("summaryText"),
-      output:           document.getElementById("output"),
-      noChanges:        document.getElementById("noChanges"),
-      copyButton:       document.getElementById("copyButton"),
-      downloadButton:   document.getElementById("downloadButton")
+      apiUrl:            document.getElementById("apiUrl"),
+      settingsToggle:    document.getElementById("settingsToggle"),
+      settingsPanel:     document.getElementById("settingsPanel"),
+      resumeFile:        document.getElementById("resumeFile"),
+      uploadZone:        document.getElementById("uploadZone"),
+      filePill:          document.getElementById("filePill"),
+      fileName:          document.getElementById("fileName"),
+      savedBadge:        document.getElementById("savedBadge"),
+      clearFile:         document.getElementById("clearFile"),
+      jd:                document.getElementById("jd"),
+      analyzeButton:     document.getElementById("analyzeButton"),
+      clearOutputButton: document.getElementById("clearOutputButton"),
+      status:            document.getElementById("status"),
+      summaryText:       document.getElementById("summaryText"),
+      output:            document.getElementById("output"),
+      noChanges:         document.getElementById("noChanges"),
+      downloadButton:    document.getElementById("downloadButton")
     };
 
     // ─── Init ────────────────────────────────────────────────────────────────────
-    (function init() {
-      const savedResume = localStorage.getItem(STORAGE_KEYS.resume);
-      const savedApiUrl = localStorage.getItem(STORAGE_KEYS.apiUrl);
-      if (savedResume) el.resume.value = savedResume;
-      el.apiUrl.value = savedApiUrl || "";
-    })();
+    async function init() {
+      el.apiUrl.value = localStorage.getItem(STORAGE_KEYS.apiUrl) || "";
+
+      try {
+        const stored = await DB.load();
+        if (stored) {
+          docxBuffer = stored.buffer;
+          docxParagraphs = stored.paragraphs;
+          uploadMode = "docx";
+          showFilePill(stored.name, true);
+          setStatus(`Restored "${stored.name}" from browser storage.`, "success");
+        }
+      } catch {
+        // IndexedDB unavailable or empty — silent fail, user can re-upload
+      }
+    }
+
+    init();
 
     // ─── Settings toggle ─────────────────────────────────────────────────────────
     el.settingsToggle.addEventListener("click", () => {
@@ -416,12 +436,6 @@
 
     el.apiUrl.addEventListener("change", () => {
       localStorage.setItem(STORAGE_KEYS.apiUrl, el.apiUrl.value.trim());
-    });
-
-    // ─── Save resume text ────────────────────────────────────────────────────────
-    el.saveResumeButton.addEventListener("click", () => {
-      localStorage.setItem(STORAGE_KEYS.resume, el.resume.value.trim());
-      setStatus("Resume text saved locally.", "success");
     });
 
     // ─── File upload ─────────────────────────────────────────────────────────────
@@ -454,14 +468,11 @@
       const isDocx =
         file.name.toLowerCase().endsWith(".docx") ||
         file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 
       if (isDocx) {
         handleDocxFile(file);
-      } else if (isPdf) {
-        handlePdfFile(file);
       } else {
-        setStatus("Please upload a .docx or .pdf file.", "error");
+        setStatus("Please upload a .docx file.", "error");
       }
     }
 
@@ -470,28 +481,28 @@
       setStatus("Reading .docx file...");
       try {
         const arrayBuffer = await file.arrayBuffer();
-        docxBuffer = arrayBuffer;
 
-        // Unpack and parse document.xml
         const zip = new PizZip(arrayBuffer);
         const xmlText = zip.file("word/document.xml").asText();
         const xmlDoc = new DOMParser().parseFromString(xmlText, "application/xml");
 
-        // Extract paragraph texts directly from <w:p> elements
         const paras = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "p"));
-        docxParagraphs = paras.map((p) =>
+        const paragraphs = paras.map((p) =>
           Array.from(p.getElementsByTagNameNS(W_NS, "t"))
             .map((t) => t.textContent)
             .join("")
         );
 
-        // Show a plain-text preview so the user can confirm content was read
-        el.resume.value = docxParagraphs.filter((p) => p.trim()).join("\n");
+        docxBuffer = arrayBuffer;
+        docxParagraphs = paragraphs;
         uploadMode = "docx";
 
-        showFilePill(file.name);
+        // Persist to IndexedDB automatically
+        await DB.save(file.name, arrayBuffer, paragraphs);
+
+        showFilePill(file.name, true);
         setStatus(
-          `Loaded ${docxParagraphs.length} paragraphs from "${file.name}".`,
+          `Loaded ${paragraphs.length} paragraphs from "${file.name}" — saved to browser.`,
           "success"
         );
       } catch (err) {
@@ -501,49 +512,24 @@
       }
     }
 
-    // ─── PDF handling (text-extraction fallback) ─────────────────────────────────
-    async function handlePdfFile(file) {
-      setStatus("Extracting text from PDF...");
-      try {
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        const pages = [];
-
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const content = await page.getTextContent();
-          pages.push(content.items.map((item) => item.str).join(" "));
-        }
-
-        const fullText = pages.join("\n\n");
-        el.resume.value = fullText;
-        uploadMode = "pdf";
-
-        showFilePill(file.name);
-        setStatus(
-          `PDF loaded: ${pdf.numPages} page${pdf.numPages !== 1 ? "s" : ""} — text extracted. Formatting will not be preserved.`,
-          "success"
-        );
-      } catch (err) {
-        resetFileUpload();
-        setStatus("Could not read the PDF. Try pasting the text manually.", "error");
-        console.error(err);
-      }
-    }
-
-    function showFilePill(name) {
+    function showFilePill(name, showSaved = false) {
       el.fileName.textContent = name;
+      el.savedBadge.style.display = showSaved ? "inline" : "none";
       el.filePill.style.display = "inline-flex";
     }
 
-    function resetFileUpload() {
+    async function resetFileUpload() {
       docxBuffer = null;
       docxParagraphs = [];
-      uploadMode = "text";
+      uploadMode = "none";
       el.resumeFile.value = "";
       el.filePill.style.display = "none";
-      el.resume.value = localStorage.getItem(STORAGE_KEYS.resume) || "";
       setStatus("");
+      try {
+        await DB.clear();
+      } catch {
+        // Ignore — state is already cleared in memory
+      }
     }
 
     // ─── Analyze ─────────────────────────────────────────────────────────────────
@@ -561,17 +547,9 @@
         return;
       }
 
-      // Build paragraph list based on upload mode
-      let paragraphs;
-      if (uploadMode === "docx") {
-        paragraphs = docxParagraphs;
-      } else {
-        const text = el.resume.value.trim();
-        if (!text) {
-          setStatus("Add a resume — upload a .docx or .pdf, or paste text.", "error");
-          return;
-        }
-        paragraphs = text.split("\n");
+      if (uploadMode !== "docx" || !docxBuffer) {
+        setStatus("Upload a .docx resume before analyzing.", "error");
+        return;
       }
 
       if (!jd) {
@@ -588,7 +566,7 @@
         const response = await fetch(apiUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paragraphs, jd })
+          body: JSON.stringify({ paragraphs: docxParagraphs, jd })
         });
 
         const data = await response.json();
@@ -599,9 +577,7 @@
 
         const { changes = [], summary = "" } = data;
         lastChanges = changes;
-        lastParagraphs = [...paragraphs];
 
-        // Render summary
         if (summary) {
           el.summaryText.textContent = summary;
         }
@@ -612,16 +588,12 @@
           return;
         }
 
-        // Render diff list
-        if (uploadMode === "docx") {
-          renderDocxDiff(changes);
-          el.downloadButton.style.display = "inline-block";
-        } else {
-          renderTextResult(paragraphs, changes);
-          el.copyButton.style.display = "inline-block";
-        }
-
-        setStatus(`Analysis complete — ${changes.length} change${changes.length !== 1 ? "s" : ""} suggested.`, "success");
+        renderDocxDiff(changes);
+        el.downloadButton.style.display = "inline-block";
+        setStatus(
+          `Analysis complete — ${changes.length} change${changes.length !== 1 ? "s" : ""} suggested.`,
+          "success"
+        );
       } catch (err) {
         setStatus(err.message || "Could not reach the backend.", "error");
       } finally {
@@ -630,7 +602,6 @@
     }
 
     // ─── Output rendering ────────────────────────────────────────────────────────
-
     function renderDocxDiff(changes) {
       const ul = document.createElement("ul");
       ul.className = "diff-list";
@@ -655,49 +626,16 @@
       el.output.appendChild(ul);
     }
 
-    function renderTextResult(paragraphs, changes) {
-      // Build a notice that formatting is not preserved for PDF/text mode
-      const notice = document.createElement("div");
-      notice.className = "pdf-notice";
-      notice.textContent =
-        "PDF/text mode: formatting is not preserved. Copy the edited text below and paste it into your original document.";
-      el.output.appendChild(notice);
-
-      // Apply changes to a copy of the paragraph array
-      const edited = [...paragraphs];
-      for (const change of changes) {
-        if (change.index >= 0 && change.index < edited.length) {
-          edited[change.index] = change.replacement;
-        }
-      }
-
-      const pre = document.createElement("pre");
-      pre.className = "pdf-result";
-      pre.textContent = edited.filter((p) => p.trim()).join("\n");
-      el.output.appendChild(pre);
-    }
-
     function clearOutput(resetStatus = true) {
       el.output.innerHTML = "";
       el.summaryText.textContent = "";
       el.noChanges.style.display = "none";
-      el.copyButton.style.display = "none";
       el.downloadButton.style.display = "none";
       lastChanges = [];
       if (resetStatus) setStatus("");
     }
 
-    // ─── Copy button (PDF/text path) ─────────────────────────────────────────────
-    el.copyButton.addEventListener("click", () => {
-      const pre = el.output.querySelector(".pdf-result");
-      if (!pre) return;
-      navigator.clipboard.writeText(pre.textContent).then(() => {
-        el.copyButton.textContent = "Copied!";
-        setTimeout(() => (el.copyButton.textContent = "Copy Edited Text"), 2000);
-      });
-    });
-
-    // ─── Download .docx (DOCX path) ──────────────────────────────────────────────
+    // ─── Download .docx ──────────────────────────────────────────────────────────
     el.downloadButton.addEventListener("click", () => {
       if (!docxBuffer || lastChanges.length === 0) return;
       applyAndDownloadDocx(docxBuffer, lastChanges);
@@ -707,8 +645,7 @@
       try {
         const zip = new PizZip(arrayBuffer);
         const xmlText = zip.file("word/document.xml").asText();
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(xmlText, "application/xml");
+        const xmlDoc = new DOMParser().parseFromString(xmlText, "application/xml");
 
         const allParas = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "p"));
 
@@ -716,34 +653,29 @@
           const para = allParas[change.index];
           if (!para) continue;
 
-          // Remove all existing run (<w:r>) elements — preserve <w:pPr> and other non-run nodes
+          // Remove all existing <w:r> runs; preserve <w:pPr> and other structural nodes
           Array.from(para.getElementsByTagNameNS(W_NS, "r")).forEach((r) =>
             r.parentNode.removeChild(r)
           );
 
-          // Create a new run with the replacement text
+          // Insert a single new run with the replacement text
           const newRun = xmlDoc.createElementNS(W_NS, "w:r");
           const newT = xmlDoc.createElementNS(W_NS, "w:t");
-          // xml:space="preserve" prevents XML parsers from trimming leading/trailing spaces
           newT.setAttributeNS(XML_NS, "xml:space", "preserve");
           newT.textContent = change.replacement;
           newRun.appendChild(newT);
           para.appendChild(newRun);
         }
 
-        // Serialize the modified XML back to a string
-        const serializer = new XMLSerializer();
-        const newXmlText = serializer.serializeToString(xmlDoc);
-
-        // Replace document.xml in the ZIP and generate the output blob
+        const newXmlText = new XMLSerializer().serializeToString(xmlDoc);
         zip.file("word/document.xml", newXmlText);
+
         const blob = zip.generate({
           type: "blob",
           mimeType:
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         });
 
-        // Trigger browser download
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
