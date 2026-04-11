@@ -1,6 +1,29 @@
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const MODEL = "gpt-4o-mini";
 
+function buildCoverLetterPrompt(coverLetter, jd, paragraphs) {
+  const resumeContext =
+    paragraphs && paragraphs.length
+      ? `\n\nRESUME CONTEXT (use only to support or fill in accurate details already implied by the cover letter -- do not invent new experience):\n${paragraphs.filter((p) => p.trim()).join("\n")}`
+      : "";
+
+  return `You are an expert cover letter writer. Adapt the cover letter below for the new job description provided.
+
+Rules:
+- Replace the target company name, role title, and any company-specific references (mission, product, team) with the equivalents from the new job description.
+- Adapt the body paragraphs to highlight the candidate's most relevant experience for the new role's requirements and values.
+- Do not invent experience, skills, achievements, or claims that are not present in the original cover letter or the resume context.
+- Keep the same personal tone, writing style, paragraph structure, and approximate length as the original.
+- Do not use em dashes anywhere in the output. Replace any em dash with a comma, semicolon, or reword the sentence.
+- Return only the adapted cover letter text -- no preamble, no explanation, no JSON, no markdown formatting.${resumeContext}
+
+ORIGINAL COVER LETTER:
+${coverLetter}
+
+NEW JOB DESCRIPTION:
+${jd}`.trim();
+}
+
 function buildPrompt(paragraphs, jd) {
   const numberedList = paragraphs.map((p, i) => `${i}: ${p}`).join("\n");
 
@@ -65,15 +88,7 @@ exports.handler = async (event) => {
     };
   }
 
-  const { paragraphs, jd } = parsed;
-
-  if (!paragraphs || !Array.isArray(paragraphs) || paragraphs.length === 0) {
-    return {
-      statusCode: 400,
-      headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "paragraphs (array) and jd are required." })
-    };
-  }
+  const { paragraphs, coverLetter, jd } = parsed;
 
   if (!jd) {
     return {
@@ -88,6 +103,67 @@ exports.handler = async (event) => {
       statusCode: 500,
       headers: { ...baseHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ error: "Missing OPENAI_API_KEY on the server." })
+    };
+  }
+
+  // ── Cover letter path ──────────────────────────────────────────────────────
+  if (coverLetter) {
+    try {
+      const openAiResponse = await fetch(OPENAI_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [
+            { role: "user", content: buildCoverLetterPrompt(coverLetter, jd, paragraphs) }
+          ]
+        })
+      });
+
+      const data = await openAiResponse.json();
+
+      if (!openAiResponse.ok) {
+        const message = data?.error?.message || "OpenAI request failed.";
+        return {
+          statusCode: openAiResponse.status,
+          headers: { ...baseHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({ error: message })
+        };
+      }
+
+      const adaptedLetter = data?.choices?.[0]?.message?.content;
+
+      if (!adaptedLetter) {
+        return {
+          statusCode: 502,
+          headers: { ...baseHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({ error: "OpenAI returned an empty response." })
+        };
+      }
+
+      return {
+        statusCode: 200,
+        headers: { ...baseHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ adaptedLetter: adaptedLetter.trim() })
+      };
+    } catch (err) {
+      return {
+        statusCode: 500,
+        headers: { ...baseHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ error: err.message || "Unexpected server error." })
+      };
+    }
+  }
+
+  // ── Resume tailoring path ─────────────────────────────────────────────────
+  if (!paragraphs || !Array.isArray(paragraphs) || paragraphs.length === 0) {
+    return {
+      statusCode: 400,
+      headers: { ...baseHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Either coverLetter or paragraphs (array) is required." })
     };
   }
 

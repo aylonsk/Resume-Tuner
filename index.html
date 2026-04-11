@@ -253,6 +253,24 @@
       content: "Your resume analysis will appear here.";
       color: #6b7280;
     }
+
+    /* Cover letter section */
+    #coverStatus {
+      min-height: 24px;
+      font-weight: 700;
+    }
+
+    #coverStatus.error { color: #b91c1c; }
+    #coverStatus.success { color: #047857; }
+
+    .cover-output {
+      white-space: pre-wrap;
+      font-family: inherit;
+      font-size: 0.95rem;
+      color: #374151;
+      margin: 0;
+      line-height: 1.7;
+    }
   </style>
 </head>
 <body>
@@ -306,6 +324,18 @@
       <div id="status" aria-live="polite"></div>
     </section>
 
+    <!-- Cover letter -->
+    <section class="card stack" id="coverLetterSection">
+      <div>
+        <label for="coverLetter">Cover Letter <span style="font-weight:400;color:#6b7280;">(optional)</span></label>
+        <textarea id="coverLetter" placeholder="Paste your existing cover letter here to adapt it for this job..."></textarea>
+      </div>
+      <div class="button-row">
+        <button id="adaptCoverButton" type="button" class="secondary">Adapt Cover Letter</button>
+      </div>
+      <div id="coverStatus" aria-live="polite"></div>
+    </section>
+
     <!-- Output -->
     <section class="card">
       <div class="output-header">
@@ -317,6 +347,15 @@
       <div id="summaryText"></div>
       <div id="output"></div>
       <p id="noChanges">No changes were needed &mdash; your resume already matches this job description well.</p>
+    </section>
+
+    <!-- Adapted cover letter output -->
+    <section class="card" id="coverOutputSection" style="display:none;">
+      <div class="output-header">
+        <h2>Adapted Cover Letter</h2>
+        <button id="copyCoverButton" type="button" class="secondary">Copy</button>
+      </div>
+      <pre id="coverOutput" class="cover-output"></pre>
     </section>
   </main>
 
@@ -388,23 +427,29 @@
 
     // ─── Element refs ────────────────────────────────────────────────────────────
     const el = {
-      apiUrl:            document.getElementById("apiUrl"),
-      settingsToggle:    document.getElementById("settingsToggle"),
-      settingsPanel:     document.getElementById("settingsPanel"),
-      resumeFile:        document.getElementById("resumeFile"),
-      uploadZone:        document.getElementById("uploadZone"),
-      filePill:          document.getElementById("filePill"),
-      fileName:          document.getElementById("fileName"),
-      savedBadge:        document.getElementById("savedBadge"),
-      clearFile:         document.getElementById("clearFile"),
-      jd:                document.getElementById("jd"),
-      analyzeButton:     document.getElementById("analyzeButton"),
-      clearOutputButton: document.getElementById("clearOutputButton"),
-      status:            document.getElementById("status"),
-      summaryText:       document.getElementById("summaryText"),
-      output:            document.getElementById("output"),
-      noChanges:         document.getElementById("noChanges"),
-      downloadButton:    document.getElementById("downloadButton")
+      apiUrl:              document.getElementById("apiUrl"),
+      settingsToggle:      document.getElementById("settingsToggle"),
+      settingsPanel:       document.getElementById("settingsPanel"),
+      resumeFile:          document.getElementById("resumeFile"),
+      uploadZone:          document.getElementById("uploadZone"),
+      filePill:            document.getElementById("filePill"),
+      fileName:            document.getElementById("fileName"),
+      savedBadge:          document.getElementById("savedBadge"),
+      clearFile:           document.getElementById("clearFile"),
+      jd:                  document.getElementById("jd"),
+      analyzeButton:       document.getElementById("analyzeButton"),
+      clearOutputButton:   document.getElementById("clearOutputButton"),
+      status:              document.getElementById("status"),
+      summaryText:         document.getElementById("summaryText"),
+      output:              document.getElementById("output"),
+      noChanges:           document.getElementById("noChanges"),
+      downloadButton:      document.getElementById("downloadButton"),
+      coverLetter:         document.getElementById("coverLetter"),
+      adaptCoverButton:    document.getElementById("adaptCoverButton"),
+      coverStatus:         document.getElementById("coverStatus"),
+      coverOutputSection:  document.getElementById("coverOutputSection"),
+      coverOutput:         document.getElementById("coverOutput"),
+      copyCoverButton:     document.getElementById("copyCoverButton")
     };
 
     // ─── Init ────────────────────────────────────────────────────────────────────
@@ -690,10 +735,78 @@
       }
     }
 
+    // ─── Cover letter adapter ────────────────────────────────────────────────────
+    el.adaptCoverButton.addEventListener("click", adaptCoverLetter);
+
+    el.copyCoverButton.addEventListener("click", () => {
+      navigator.clipboard.writeText(el.coverOutput.textContent).then(() => {
+        el.copyCoverButton.textContent = "Copied!";
+        setTimeout(() => (el.copyCoverButton.textContent = "Copy"), 2000);
+      });
+    });
+
+    async function adaptCoverLetter() {
+      const apiUrl = el.apiUrl.value.trim();
+      const coverLetter = el.coverLetter.value.trim();
+      const jd = el.jd.value.trim();
+
+      if (!apiUrl) {
+        setCoverStatus("Open Settings (top right) and paste your Netlify function URL.", "error");
+        el.settingsPanel.style.display = "block";
+        el.settingsToggle.textContent = "✕ Close Settings";
+        return;
+      }
+
+      if (!coverLetter) {
+        setCoverStatus("Paste a cover letter before adapting.", "error");
+        return;
+      }
+
+      if (!jd) {
+        setCoverStatus("Paste a job description before adapting.", "error");
+        return;
+      }
+
+      el.adaptCoverButton.disabled = true;
+      setCoverStatus("Adapting cover letter...");
+      el.coverOutputSection.style.display = "none";
+
+      try {
+        const response = await fetch(apiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            coverLetter,
+            jd,
+            paragraphs: docxParagraphs
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Adaptation failed.");
+        }
+
+        el.coverOutput.textContent = data.adaptedLetter || "";
+        el.coverOutputSection.style.display = "block";
+        setCoverStatus("Cover letter adapted.", "success");
+      } catch (err) {
+        setCoverStatus(err.message || "Could not reach the backend.", "error");
+      } finally {
+        el.adaptCoverButton.disabled = false;
+      }
+    }
+
     // ─── Utilities ───────────────────────────────────────────────────────────────
     function setStatus(message, type = "") {
       el.status.textContent = message;
       el.status.className = type;
+    }
+
+    function setCoverStatus(message, type = "") {
+      el.coverStatus.textContent = message;
+      el.coverStatus.className = type;
     }
   </script>
 </body>
