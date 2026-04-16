@@ -317,6 +317,11 @@
         <textarea id="jd" placeholder="Paste the job description you want to target."></textarea>
       </div>
 
+      <div>
+        <label for="instructions">Additional Instructions <span style="font-weight:400;color:#6b7280;">(optional)</span></label>
+        <textarea id="instructions" placeholder="e.g. Emphasize leadership experience. Avoid mentioning Python."></textarea>
+      </div>
+
       <div class="button-row">
         <button id="analyzeButton" type="button">Analyze and Tailor</button>
         <button id="clearOutputButton" type="button" class="secondary">Clear Output</button>
@@ -365,7 +370,8 @@
     const XML_NS = "http://www.w3.org/XML/1998/namespace";
 
     const STORAGE_KEYS = {
-      apiUrl: "resume-tuner-api-url"
+      apiUrl:      "resume-tuner-api-url",
+      coverLetter: "resume-tuner-cover-letter"
     };
 
     // ─── IndexedDB helper ────────────────────────────────────────────────────────
@@ -445,6 +451,7 @@
       output:              document.getElementById("output"),
       noChanges:           document.getElementById("noChanges"),
       downloadButton:      document.getElementById("downloadButton"),
+      instructions:        document.getElementById("instructions"),
       coverLetter:         document.getElementById("coverLetter"),
       adaptCoverButton:    document.getElementById("adaptCoverButton"),
       coverStatus:         document.getElementById("coverStatus"),
@@ -456,6 +463,7 @@
     // ─── Init ────────────────────────────────────────────────────────────────────
     async function init() {
       el.apiUrl.value = localStorage.getItem(STORAGE_KEYS.apiUrl) || "";
+      el.coverLetter.value = localStorage.getItem(STORAGE_KEYS.coverLetter) || "";
 
       try {
         const stored = await DB.load();
@@ -483,6 +491,10 @@
 
     el.apiUrl.addEventListener("change", () => {
       localStorage.setItem(STORAGE_KEYS.apiUrl, el.apiUrl.value.trim());
+    });
+
+    el.coverLetter.addEventListener("input", () => {
+      localStorage.setItem(STORAGE_KEYS.coverLetter, el.coverLetter.value);
     });
 
     // ─── File upload ─────────────────────────────────────────────────────────────
@@ -615,7 +627,7 @@
         const response = await fetch(apiUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paragraphs: docxParagraphs, jd })
+          body: JSON.stringify({ paragraphs: docxParagraphs, jd, instructions: el.instructions.value.trim() })
         });
 
         const data = await response.json();
@@ -785,7 +797,8 @@
           body: JSON.stringify({
             coverLetter,
             jd,
-            paragraphs: docxParagraphs
+            paragraphs: docxParagraphs,
+            instructions: el.instructions.value.trim()
           })
         });
 

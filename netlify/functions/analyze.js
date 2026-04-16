@@ -1,10 +1,15 @@
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-5";
 
-function buildCoverLetterPrompt(coverLetter, jd, paragraphs) {
+function buildCoverLetterPrompt(coverLetter, jd, paragraphs, instructions) {
   const resumeContext =
     paragraphs && paragraphs.length
       ? `\n\nRESUME CONTEXT (use only to support or fill in accurate details already implied by the cover letter -- do not invent new experience):\n${paragraphs.filter((p) => p.trim()).join("\n")}`
+      : "";
+
+  const extraInstructions =
+    instructions
+      ? `\n\nADDITIONAL INSTRUCTIONS (take these into account alongside the rules above):\n${instructions}`
       : "";
 
   return `You are an expert cover letter writer. Adapt the cover letter below for the new job description provided.
@@ -15,7 +20,7 @@ Rules:
 - Do not invent experience, skills, achievements, or claims that are not present in the original cover letter or the resume context.
 - Keep the same personal tone, writing style, paragraph structure, and approximate length as the original.
 - Do not use em dashes anywhere in the output. Replace any em dash with a comma, semicolon, or reword the sentence.
-- Return only the adapted cover letter text -- no preamble, no explanation, no JSON, no markdown formatting.${resumeContext}
+- Return only the adapted cover letter text -- no preamble, no explanation, no JSON, no markdown formatting.${resumeContext}${extraInstructions}
 
 ORIGINAL COVER LETTER:
 ${coverLetter}
@@ -24,8 +29,13 @@ NEW JOB DESCRIPTION:
 ${jd}`.trim();
 }
 
-function buildPrompt(paragraphs, jd) {
+function buildPrompt(paragraphs, jd, instructions) {
   const numberedList = paragraphs.map((p, i) => `${i}: ${p}`).join("\n");
+
+  const extraInstructions =
+    instructions
+      ? `\n\nADDITIONAL INSTRUCTIONS (take these into account alongside the rules above):\n${instructions}`
+      : "";
 
   return `You are an expert resume optimizer. Analyze the numbered resume paragraphs below against the job description, then return a JSON object identifying targeted improvements.
 
@@ -40,7 +50,7 @@ Rules:
 - Keep all replacements realistic and grounded in what the resume already states.
 - Add metrics only when clearly implied by existing content.
 - Avoid keyword stuffing. Make every change purposeful.
-- Keep replacements concise — match the length and style of the original line.
+- Keep replacements concise — match the length and style of the original line.${extraInstructions}
 
 Return ONLY a JSON object with exactly these two fields:
 {
@@ -88,7 +98,7 @@ exports.handler = async (event) => {
     };
   }
 
-  const { paragraphs, coverLetter, jd } = parsed;
+  const { paragraphs, coverLetter, jd, instructions } = parsed;
 
   if (!jd) {
     return {
@@ -125,7 +135,7 @@ exports.handler = async (event) => {
           model: MODEL,
           max_tokens: 4096,
           messages: [
-            { role: "user", content: buildCoverLetterPrompt(coverLetter, jd, paragraphs) }
+            { role: "user", content: buildCoverLetterPrompt(coverLetter, jd, paragraphs, instructions) }
           ]
         })
       });
@@ -189,7 +199,7 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 4096,
-        messages: [{ role: "user", content: buildPrompt(paragraphs, jd) }]
+        messages: [{ role: "user", content: buildPrompt(paragraphs, jd, instructions) }]
       })
     });
 
