@@ -106,7 +106,7 @@ exports.handler = async (event) => {
     };
   }
 
-  // Abort Anthropic requests that exceed 24 s (safely under Netlify's 26 s function limit)
+  // Abort Anthropic requests that exceed 24 s (safely under Netlify's function timeout limit)
   const controller = new AbortController();
   const abortTimer = setTimeout(() => controller.abort(), 24000);
 
@@ -205,22 +205,13 @@ exports.handler = async (event) => {
       };
     }
 
-    // #region agent log - debug 811f4c
-    const stopReason = data?.stop_reason;
-    console.log("[debug-811f4c] stop_reason:", stopReason, "| content blocks:", data?.content?.length);
-    // #endregion
-
     const rawContent = data?.content?.[0]?.text;
-
-    // #region agent log - debug 811f4c
-    console.log("[debug-811f4c] rawContent first 300 chars:", rawContent ? rawContent.slice(0, 300) : "EMPTY");
-    // #endregion
 
     if (!rawContent) {
       return {
         statusCode: 502,
         headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "Anthropic returned an empty response.", debug_stop_reason: stopReason })
+        body: JSON.stringify({ error: "Anthropic returned an empty response." })
       };
     }
 
@@ -230,29 +221,14 @@ exports.handler = async (event) => {
       cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```\s*$/, "");
     }
 
-    // #region agent log - debug 811f4c
-    console.log("[debug-811f4c] post-fix: cleaned first 100 chars:", cleaned.slice(0, 100));
-    // #endregion
-
     let result;
     try {
       result = JSON.parse(cleaned);
-      // #region agent log - debug 811f4c
-      console.log("[debug-811f4c] post-fix: JSON.parse succeeded, changes count:", result?.changes?.length);
-      // #endregion
     } catch {
-      // #region agent log - debug 811f4c
-      console.log("[debug-811f4c] post-fix: JSON.parse still failed. cleaned[:500]:", cleaned.slice(0, 500));
-      // #endregion
       return {
         statusCode: 502,
         headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          error: "Anthropic returned malformed JSON. Try again.",
-          debug_stop_reason: stopReason,
-          debug_raw_prefix: rawContent.slice(0, 500),
-          debug_raw_suffix: rawContent.slice(-200)
-        })
+        body: JSON.stringify({ error: "Anthropic returned malformed JSON. Try again." })
       };
     }
 
@@ -267,9 +243,6 @@ exports.handler = async (event) => {
   } catch (err) {
     clearTimeout(abortTimer);
     const isTimeout = err.name === "AbortError";
-    // #region agent log - debug 811f4c
-    console.log("[debug-811f4c] post-fix catch:", err.name, err.message);
-    // #endregion
     return {
       statusCode: isTimeout ? 504 : 500,
       headers: { ...baseHeaders, "Content-Type": "application/json" },
