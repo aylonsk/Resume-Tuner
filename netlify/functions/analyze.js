@@ -195,13 +195,22 @@ exports.handler = async (event) => {
       };
     }
 
+    // #region agent log - debug 811f4c
+    const stopReason = data?.stop_reason;
+    console.log("[debug-811f4c] stop_reason:", stopReason, "| content blocks:", data?.content?.length);
+    // #endregion
+
     const rawContent = data?.content?.[0]?.text;
+
+    // #region agent log - debug 811f4c
+    console.log("[debug-811f4c] rawContent first 300 chars:", rawContent ? rawContent.slice(0, 300) : "EMPTY");
+    // #endregion
 
     if (!rawContent) {
       return {
         statusCode: 502,
         headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "Anthropic returned an empty response." })
+        body: JSON.stringify({ error: "Anthropic returned an empty response.", debug_stop_reason: stopReason })
       };
     }
 
@@ -209,10 +218,19 @@ exports.handler = async (event) => {
     try {
       result = JSON.parse(rawContent);
     } catch {
+      // #region agent log - debug 811f4c
+      // Hypothesis A: fenced markdown. Hypothesis B: truncation. Hypothesis C: preamble text.
+      console.log("[debug-811f4c] JSON.parse failed. rawContent[:500]:", rawContent.slice(0, 500));
+      // #endregion
       return {
         statusCode: 502,
         headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "Anthropic returned malformed JSON. Try again." })
+        body: JSON.stringify({
+          error: "Anthropic returned malformed JSON. Try again.",
+          debug_stop_reason: stopReason,
+          debug_raw_prefix: rawContent.slice(0, 500),
+          debug_raw_suffix: rawContent.slice(-200)
+        })
       };
     }
 
