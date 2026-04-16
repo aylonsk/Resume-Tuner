@@ -106,11 +106,16 @@ exports.handler = async (event) => {
     };
   }
 
+  // Abort Anthropic requests that exceed 24 s (safely under Netlify's 26 s function limit)
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), 24000);
+
   // ── Cover letter path ──────────────────────────────────────────────────────
   if (coverLetter) {
     try {
       const anthropicResponse = await fetch(ANTHROPIC_API_URL, {
         method: "POST",
+        signal: controller.signal,
         headers: {
           "Content-Type": "application/json",
           "x-api-key": process.env.ANTHROPIC_API_KEY,
@@ -125,6 +130,7 @@ exports.handler = async (event) => {
         })
       });
 
+      clearTimeout(abortTimer);
       const data = await anthropicResponse.json();
 
       if (!anthropicResponse.ok) {
@@ -152,10 +158,12 @@ exports.handler = async (event) => {
         body: JSON.stringify({ adaptedLetter: adaptedLetter.trim() })
       };
     } catch (err) {
+      clearTimeout(abortTimer);
+      const isTimeout = err.name === "AbortError";
       return {
-        statusCode: 500,
+        statusCode: isTimeout ? 504 : 500,
         headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: err.message || "Unexpected server error." })
+        body: JSON.stringify({ error: isTimeout ? "The AI took too long to respond. Please try again." : (err.message || "Unexpected server error.") })
       };
     }
   }
@@ -172,6 +180,7 @@ exports.handler = async (event) => {
   try {
     const anthropicResponse = await fetch(ANTHROPIC_API_URL, {
       method: "POST",
+      signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
         "x-api-key": process.env.ANTHROPIC_API_KEY,
@@ -184,6 +193,7 @@ exports.handler = async (event) => {
       })
     });
 
+    clearTimeout(abortTimer);
     const data = await anthropicResponse.json();
 
     if (!anthropicResponse.ok) {
@@ -255,10 +265,15 @@ exports.handler = async (event) => {
       body: JSON.stringify({ changes, summary })
     };
   } catch (err) {
+    clearTimeout(abortTimer);
+    const isTimeout = err.name === "AbortError";
+    // #region agent log - debug 811f4c
+    console.log("[debug-811f4c] post-fix catch:", err.name, err.message);
+    // #endregion
     return {
-      statusCode: 500,
+      statusCode: isTimeout ? 504 : 500,
       headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: err.message || "Unexpected server error." })
+      body: JSON.stringify({ error: isTimeout ? "The AI took too long to respond. Please try again." : (err.message || "Unexpected server error.") })
     };
   }
 };
