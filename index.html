@@ -423,6 +423,7 @@
     let uploadMode = "none";       // 'none' | 'docx'
     let docxBuffer = null;         // ArrayBuffer of the loaded .docx
     let docxParagraphs = [];       // paragraph strings extracted from document.xml
+    let resumeFileName = "";       // original .docx filename (upload or restored from IndexedDB)
     let lastChanges = [];
 
     // ─── Element refs ────────────────────────────────────────────────────────────
@@ -461,6 +462,7 @@
         if (stored) {
           docxBuffer = stored.buffer;
           docxParagraphs = stored.paragraphs;
+          resumeFileName = stored.name || "";
           uploadMode = "docx";
           showFilePill(stored.name, true);
           setStatus(`Restored "${stored.name}" from browser storage.`, "success");
@@ -540,6 +542,7 @@
 
         docxBuffer = arrayBuffer;
         docxParagraphs = paragraphs;
+        resumeFileName = file.name;
         uploadMode = "docx";
 
         // Persist to IndexedDB automatically
@@ -566,6 +569,7 @@
     async function resetFileUpload() {
       docxBuffer = null;
       docxParagraphs = [];
+      resumeFileName = "";
       uploadMode = "none";
       el.resumeFile.value = "";
       el.filePill.style.display = "none";
@@ -724,7 +728,10 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = "tailored-resume.docx";
+        let downloadName = (resumeFileName || "").trim();
+        if (!downloadName) downloadName = "tailored-resume.docx";
+        else if (!downloadName.toLowerCase().endsWith(".docx")) downloadName += ".docx";
+        a.download = downloadName;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
