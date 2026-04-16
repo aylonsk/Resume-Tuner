@@ -1,5 +1,5 @@
-const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const MODEL = "gpt-4o-mini";
+const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+const MODEL = "claude-sonnet-4-5";
 
 function buildCoverLetterPrompt(coverLetter, jd, paragraphs) {
   const resumeContext =
@@ -98,49 +98,51 @@ exports.handler = async (event) => {
     };
   }
 
-  if (!process.env.OPENAI_API_KEY) {
+  if (!process.env.ANTHROPIC_API_KEY) {
     return {
       statusCode: 500,
       headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Missing OPENAI_API_KEY on the server." })
+      body: JSON.stringify({ error: "Missing ANTHROPIC_API_KEY on the server." })
     };
   }
 
   // ── Cover letter path ──────────────────────────────────────────────────────
   if (coverLetter) {
     try {
-      const openAiResponse = await fetch(OPENAI_API_URL, {
+      const anthropicResponse = await fetch(ANTHROPIC_API_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+          "x-api-key": process.env.ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01"
         },
         body: JSON.stringify({
           model: MODEL,
+          max_tokens: 4096,
           messages: [
             { role: "user", content: buildCoverLetterPrompt(coverLetter, jd, paragraphs) }
           ]
         })
       });
 
-      const data = await openAiResponse.json();
+      const data = await anthropicResponse.json();
 
-      if (!openAiResponse.ok) {
-        const message = data?.error?.message || "OpenAI request failed.";
+      if (!anthropicResponse.ok) {
+        const message = data?.error?.message || "Anthropic request failed.";
         return {
-          statusCode: openAiResponse.status,
+          statusCode: anthropicResponse.status,
           headers: { ...baseHeaders, "Content-Type": "application/json" },
           body: JSON.stringify({ error: message })
         };
       }
 
-      const adaptedLetter = data?.choices?.[0]?.message?.content;
+      const adaptedLetter = data?.content?.[0]?.text;
 
       if (!adaptedLetter) {
         return {
           statusCode: 502,
           headers: { ...baseHeaders, "Content-Type": "application/json" },
-          body: JSON.stringify({ error: "OpenAI returned an empty response." })
+          body: JSON.stringify({ error: "Anthropic returned an empty response." })
         };
       }
 
@@ -168,37 +170,38 @@ exports.handler = async (event) => {
   }
 
   try {
-    const openAiResponse = await fetch(OPENAI_API_URL, {
+    const anthropicResponse = await fetch(ANTHROPIC_API_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
         model: MODEL,
-        response_format: { type: "json_object" },
+        max_tokens: 4096,
         messages: [{ role: "user", content: buildPrompt(paragraphs, jd) }]
       })
     });
 
-    const data = await openAiResponse.json();
+    const data = await anthropicResponse.json();
 
-    if (!openAiResponse.ok) {
-      const message = data?.error?.message || "OpenAI request failed.";
+    if (!anthropicResponse.ok) {
+      const message = data?.error?.message || "Anthropic request failed.";
       return {
-        statusCode: openAiResponse.status,
+        statusCode: anthropicResponse.status,
         headers: { ...baseHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ error: message })
       };
     }
 
-    const rawContent = data?.choices?.[0]?.message?.content;
+    const rawContent = data?.content?.[0]?.text;
 
     if (!rawContent) {
       return {
         statusCode: 502,
         headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "OpenAI returned an empty response." })
+        body: JSON.stringify({ error: "Anthropic returned an empty response." })
       };
     }
 
@@ -209,7 +212,7 @@ exports.handler = async (event) => {
       return {
         statusCode: 502,
         headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "OpenAI returned malformed JSON. Try again." })
+        body: JSON.stringify({ error: "Anthropic returned malformed JSON. Try again." })
       };
     }
 

@@ -1,5 +1,5 @@
-const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const MODEL = "gpt-4o-mini";
+const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+const MODEL = "claude-sonnet-4-5";
 
 function setCorsHeaders(res) {
   const allowedOrigin = process.env.ALLOWED_ORIGIN || "*";
@@ -55,19 +55,21 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Both resume and jd are required." });
   }
 
-  if (!process.env.OPENAI_API_KEY) {
-    return res.status(500).json({ error: "Missing OPENAI_API_KEY on the server." });
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({ error: "Missing ANTHROPIC_API_KEY on the server." });
   }
 
   try {
-    const openAiResponse = await fetch(OPENAI_API_URL, {
+    const anthropicResponse = await fetch(ANTHROPIC_API_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
         model: MODEL,
+        max_tokens: 4096,
         messages: [
           {
             role: "user",
@@ -77,17 +79,17 @@ export default async function handler(req, res) {
       })
     });
 
-    const data = await openAiResponse.json();
+    const data = await anthropicResponse.json();
 
-    if (!openAiResponse.ok) {
-      const message = data?.error?.message || "OpenAI request failed.";
-      return res.status(openAiResponse.status).json({ error: message });
+    if (!anthropicResponse.ok) {
+      const message = data?.error?.message || "Anthropic request failed.";
+      return res.status(anthropicResponse.status).json({ error: message });
     }
 
-    const result = data?.choices?.[0]?.message?.content;
+    const result = data?.content?.[0]?.text;
 
     if (!result) {
-      return res.status(502).json({ error: "OpenAI returned an empty response." });
+      return res.status(502).json({ error: "Anthropic returned an empty response." });
     }
 
     return res.status(200).json({ result });
