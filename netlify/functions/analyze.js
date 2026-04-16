@@ -214,13 +214,25 @@ exports.handler = async (event) => {
       };
     }
 
+    // Strip markdown code fences that Claude adds around JSON output
+    let cleaned = rawContent.trim();
+    if (cleaned.startsWith("```")) {
+      cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```\s*$/, "");
+    }
+
+    // #region agent log - debug 811f4c
+    console.log("[debug-811f4c] post-fix: cleaned first 100 chars:", cleaned.slice(0, 100));
+    // #endregion
+
     let result;
     try {
-      result = JSON.parse(rawContent);
+      result = JSON.parse(cleaned);
+      // #region agent log - debug 811f4c
+      console.log("[debug-811f4c] post-fix: JSON.parse succeeded, changes count:", result?.changes?.length);
+      // #endregion
     } catch {
       // #region agent log - debug 811f4c
-      // Hypothesis A: fenced markdown. Hypothesis B: truncation. Hypothesis C: preamble text.
-      console.log("[debug-811f4c] JSON.parse failed. rawContent[:500]:", rawContent.slice(0, 500));
+      console.log("[debug-811f4c] post-fix: JSON.parse still failed. cleaned[:500]:", cleaned.slice(0, 500));
       // #endregion
       return {
         statusCode: 502,
