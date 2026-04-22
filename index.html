@@ -335,6 +335,10 @@
         <label for="coverLetter">Cover Letter <span style="font-weight:400;color:#6b7280;">(optional)</span></label>
         <textarea id="coverLetter" placeholder="Paste your existing cover letter here to adapt it for this job..."></textarea>
       </div>
+      <div>
+        <label for="coverInstructions">Additional Instructions <span style="font-weight:400;color:#6b7280;">(optional)</span></label>
+        <textarea id="coverInstructions" placeholder="e.g. Make the tone more concise. Emphasize customer-facing experience."></textarea>
+      </div>
       <div class="button-row">
         <button id="adaptCoverButton" type="button" class="secondary">Adapt Cover Letter</button>
       </div>
@@ -453,6 +457,7 @@
       downloadButton:      document.getElementById("downloadButton"),
       instructions:        document.getElementById("instructions"),
       coverLetter:         document.getElementById("coverLetter"),
+      coverInstructions:   document.getElementById("coverInstructions"),
       adaptCoverButton:    document.getElementById("adaptCoverButton"),
       coverStatus:         document.getElementById("coverStatus"),
       coverOutputSection:  document.getElementById("coverOutputSection"),
@@ -798,7 +803,7 @@
             coverLetter,
             jd,
             paragraphs: docxParagraphs,
-            instructions: el.instructions.value.trim()
+            instructions: el.coverInstructions.value.trim()
           })
         });
 
