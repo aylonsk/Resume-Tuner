@@ -50,7 +50,13 @@ Rules:
 - Keep all replacements realistic and grounded in what the resume already states.
 - Add metrics only when clearly implied by existing content.
 - Avoid keyword stuffing. Make every change purposeful.
-- Keep replacements concise — match the length and style of the original line.${extraInstructions}
+
+ONE-PAGE CONSTRAINT (critical):
+- The original resume is laid out to fit on exactly one page. Your edits must preserve that.
+- Each "replacement" string MUST be no longer than its "original" string in character count. Equal or shorter only — never longer.
+- This is a hard rule, not a guideline. Even a few extra characters can push a bullet onto a new line and overflow the page.
+- If your best rewrite would be longer than the original, either (a) tighten it until it fits within the original character budget, or (b) skip that change entirely. Do not return a longer replacement under any circumstances.
+- Prefer shorter, sharper phrasing. Cutting filler words is encouraged.${extraInstructions}
 
 Return ONLY a JSON object with exactly these two fields:
 {
@@ -242,8 +248,27 @@ exports.handler = async (event) => {
       };
     }
 
-    const changes = Array.isArray(result.changes) ? result.changes : [];
-    const summary = typeof result.summary === "string" ? result.summary : "";
+    const rawChanges = Array.isArray(result.changes) ? result.changes : [];
+    let summary = typeof result.summary === "string" ? result.summary : "";
+
+    // Enforce the one-page constraint deterministically: drop any replacement
+    // longer than its original, since extra characters can push the resume to
+    // a second page.
+    const changes = [];
+    let droppedForLength = 0;
+    for (const change of rawChanges) {
+      const original = typeof change?.original === "string" ? change.original : "";
+      const replacement = typeof change?.replacement === "string" ? change.replacement : "";
+      if (replacement.length > original.length) {
+        droppedForLength += 1;
+        continue;
+      }
+      changes.push(change);
+    }
+    if (droppedForLength > 0) {
+      const note = `Filtered ${droppedForLength} suggested change(s) that would have exceeded the one-page limit.`;
+      summary = summary ? `${summary} ${note}` : note;
+    }
 
     return {
       statusCode: 200,
