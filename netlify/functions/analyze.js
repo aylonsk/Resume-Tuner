@@ -1,5 +1,122 @@
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-sonnet-4-5";
+
+// Model registry. The frontend sends a short key ("haiku" / "sonnet"); the real
+// model IDs and per-model request options live here so the client can never
+// select an arbitrary (or expensive) model.
+//
+// - Haiku 4.5 is the default: fast and cheap, so a full response comfortably
+//   finishes inside Netlify's 10 s free-tier function limit.
+// - Sonnet 5 is the higher-quality option. It runs adaptive thinking by
+//   default, which would routinely exceed 10 s, so we disable thinking to keep
+//   it fast while still getting Sonnet-tier output quality.
+const MODELS = {
+  haiku:  { id: "claude-haiku-4-5", options: {} },
+  sonnet: { id: "claude-sonnet-5",  options: { thinking: { type: "disabled" } } }
+};
+const DEFAULT_MODEL_KEY = "haiku";
+
+// Overall time budget for the Anthropic call(s). Netlify's free tier hard-kills
+// the function at 10 s, so we abort ourselves at 9 s and return a clean error
+// instead of an opaque 502.
+const DEADLINE_MS = 9000;
+
+// Anthropic statuses worth a retry: rate limit (429), overloaded (529), and
+// transient server errors. 529 in particular is a common cause of the
+// "fails then works on a rerun" behavior.
+const RETRYABLE_STATUSES = new Set([408, 409, 429, 500, 502, 503, 529]);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function resolveModel(key) {
+  return MODELS[key] || MODELS[DEFAULT_MODEL_KEY];
+}
+
+function extractText(data) {
+  if (!data || !Array.isArray(data.content)) return "";
+  const block = data.content.find((b) => b && b.type === "text" && typeof b.text === "string");
+  return block ? block.text : "";
+}
+
+// Call Anthropic with a shared deadline and a single retry on transient errors.
+// Each attempt's AbortController is scoped to the *remaining* budget, so the
+// total wall-clock never exceeds deadlineMs — no attempt can overrun the
+// platform timeout. Returns { ok, data } on success or { ok:false, status,
+// message } on failure.
+async function callAnthropic({ apiKey, model, maxTokens, prompt, deadlineMs }) {
+  const start = Date.now();
+  let attempt = 0;
+  let lastErr = null;
+
+  while (true) {
+    attempt += 1;
+    const remaining = deadlineMs - (Date.now() - start);
+    // Don't start an attempt we can't reasonably finish.
+    if (remaining <= 1500) break;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remaining);
+
+    try {
+      const response = await fetch(ANTHROPIC_API_URL, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01"
+        },
+        body: JSON.stringify({
+          model: model.id,
+          max_tokens: maxTokens,
+          messages: [{ role: "user", content: prompt }],
+          ...model.options
+        })
+      });
+      clearTimeout(timer);
+
+      if (response.ok) {
+        return { ok: true, data: await response.json() };
+      }
+
+      let errBody = null;
+      try { errBody = await response.json(); } catch { /* non-JSON error body */ }
+      const message = errBody?.error?.message || `Anthropic request failed (${response.status}).`;
+
+      if (RETRYABLE_STATUSES.has(response.status)) {
+        lastErr = { status: response.status, message };
+        const backoff = Math.min(400 * attempt, 1200);
+        if (deadlineMs - (Date.now() - start) > backoff + 1500) {
+          await sleep(backoff);
+          continue;
+        }
+        break;
+      }
+
+      // Non-retryable (400/401/403/413…) — surface immediately.
+      return { ok: false, status: response.status, message };
+    } catch (err) {
+      clearTimeout(timer);
+      if (err.name === "AbortError") {
+        // Out of time — a retry can't help within the budget.
+        return { ok: false, status: 504, message: "The AI took too long to respond. Please try again." };
+      }
+      // Network-level failure — retry if the budget allows.
+      lastErr = { status: 502, message: err.message || "Network error contacting the AI." };
+      const backoff = Math.min(400 * attempt, 1200);
+      if (deadlineMs - (Date.now() - start) > backoff + 1500) {
+        await sleep(backoff);
+        continue;
+      }
+      break;
+    }
+  }
+
+  return {
+    ok: false,
+    status: lastErr?.status || 504,
+    message: lastErr?.message || "The AI was temporarily unavailable. Please try again."
+  };
+}
 
 function buildCoverLetterPrompt(coverLetter, jd, paragraphs, instructions) {
   const resumeContext =
@@ -80,208 +197,118 @@ function corsHeaders() {
 
 exports.handler = async (event) => {
   const baseHeaders = corsHeaders();
+  const json = (statusCode, obj) => ({
+    statusCode,
+    headers: { ...baseHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify(obj)
+  });
 
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: baseHeaders, body: "" };
   }
 
   if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Method not allowed. Use POST." })
-    };
+    return json(405, { error: "Method not allowed. Use POST." });
   }
 
   let parsed;
   try {
     parsed = JSON.parse(event.body || "{}");
   } catch {
-    return {
-      statusCode: 400,
-      headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Invalid JSON body." })
-    };
+    return json(400, { error: "Invalid JSON body." });
   }
 
-  const { paragraphs, coverLetter, jd, instructions } = parsed;
+  const { paragraphs, coverLetter, jd, instructions, model: modelKey } = parsed;
 
   if (!jd) {
-    return {
-      statusCode: 400,
-      headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "jd is required." })
-    };
+    return json(400, { error: "jd is required." });
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    return {
-      statusCode: 500,
-      headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Missing ANTHROPIC_API_KEY on the server." })
-    };
+    return json(500, { error: "Missing ANTHROPIC_API_KEY on the server." });
   }
 
-  // Abort Anthropic requests that exceed 24 s (safely under Netlify's function timeout limit)
-  const controller = new AbortController();
-  const abortTimer = setTimeout(() => controller.abort(), 24000);
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const model = resolveModel(modelKey);
 
   // ── Cover letter path ──────────────────────────────────────────────────────
   if (coverLetter) {
-    try {
-      const anthropicResponse = await fetch(ANTHROPIC_API_URL, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": process.env.ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01"
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          max_tokens: 4096,
-          messages: [
-            { role: "user", content: buildCoverLetterPrompt(coverLetter, jd, paragraphs, instructions) }
-          ]
-        })
-      });
+    const result = await callAnthropic({
+      apiKey,
+      model,
+      maxTokens: 4096,
+      deadlineMs: DEADLINE_MS,
+      prompt: buildCoverLetterPrompt(coverLetter, jd, paragraphs, instructions)
+    });
 
-      clearTimeout(abortTimer);
-      const data = await anthropicResponse.json();
-
-      if (!anthropicResponse.ok) {
-        const message = data?.error?.message || "Anthropic request failed.";
-        return {
-          statusCode: anthropicResponse.status,
-          headers: { ...baseHeaders, "Content-Type": "application/json" },
-          body: JSON.stringify({ error: message })
-        };
-      }
-
-      const adaptedLetter = data?.content?.[0]?.text;
-
-      if (!adaptedLetter) {
-        return {
-          statusCode: 502,
-          headers: { ...baseHeaders, "Content-Type": "application/json" },
-          body: JSON.stringify({ error: "Anthropic returned an empty response." })
-        };
-      }
-
-      return {
-        statusCode: 200,
-        headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ adaptedLetter: adaptedLetter.trim() })
-      };
-    } catch (err) {
-      clearTimeout(abortTimer);
-      const isTimeout = err.name === "AbortError";
-      return {
-        statusCode: isTimeout ? 504 : 500,
-        headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: isTimeout ? "The AI took too long to respond. Please try again." : (err.message || "Unexpected server error.") })
-      };
+    if (!result.ok) {
+      return json(result.status || 502, { error: result.message });
     }
+
+    const adaptedLetter = extractText(result.data);
+    if (!adaptedLetter) {
+      return json(502, { error: "The AI returned an empty response. Please try again." });
+    }
+
+    return json(200, { adaptedLetter: adaptedLetter.trim() });
   }
 
   // ── Resume tailoring path ─────────────────────────────────────────────────
   if (!paragraphs || !Array.isArray(paragraphs) || paragraphs.length === 0) {
-    return {
-      statusCode: 400,
-      headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Either coverLetter or paragraphs (array) is required." })
-    };
+    return json(400, { error: "Either coverLetter or paragraphs (array) is required." });
   }
 
+  const result = await callAnthropic({
+    apiKey,
+    model,
+    maxTokens: 4096,
+    deadlineMs: DEADLINE_MS,
+    prompt: buildPrompt(paragraphs, jd, instructions)
+  });
+
+  if (!result.ok) {
+    return json(result.status || 502, { error: result.message });
+  }
+
+  const rawContent = extractText(result.data);
+  if (!rawContent) {
+    return json(502, { error: "The AI returned an empty response. Please try again." });
+  }
+
+  // Strip markdown code fences that the model sometimes adds around JSON output.
+  let cleaned = rawContent.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```\s*$/, "");
+  }
+
+  let resultJson;
   try {
-    const anthropicResponse = await fetch(ANTHROPIC_API_URL, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 4096,
-        messages: [{ role: "user", content: buildPrompt(paragraphs, jd, instructions) }]
-      })
-    });
-
-    clearTimeout(abortTimer);
-    const data = await anthropicResponse.json();
-
-    if (!anthropicResponse.ok) {
-      const message = data?.error?.message || "Anthropic request failed.";
-      return {
-        statusCode: anthropicResponse.status,
-        headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: message })
-      };
-    }
-
-    const rawContent = data?.content?.[0]?.text;
-
-    if (!rawContent) {
-      return {
-        statusCode: 502,
-        headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "Anthropic returned an empty response." })
-      };
-    }
-
-    // Strip markdown code fences that Claude adds around JSON output
-    let cleaned = rawContent.trim();
-    if (cleaned.startsWith("```")) {
-      cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```\s*$/, "");
-    }
-
-    let result;
-    try {
-      result = JSON.parse(cleaned);
-    } catch {
-      return {
-        statusCode: 502,
-        headers: { ...baseHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "Anthropic returned malformed JSON. Try again." })
-      };
-    }
-
-    const rawChanges = Array.isArray(result.changes) ? result.changes : [];
-    let summary = typeof result.summary === "string" ? result.summary : "";
-
-    // Enforce the one-page constraint deterministically: drop any replacement
-    // longer than its original, since extra characters can push the resume to
-    // a second page.
-    const changes = [];
-    let droppedForLength = 0;
-    for (const change of rawChanges) {
-      const original = typeof change?.original === "string" ? change.original : "";
-      const replacement = typeof change?.replacement === "string" ? change.replacement : "";
-      if (replacement.length > original.length) {
-        droppedForLength += 1;
-        continue;
-      }
-      changes.push(change);
-    }
-    if (droppedForLength > 0) {
-      const note = `Filtered ${droppedForLength} suggested change(s) that would have exceeded the one-page limit.`;
-      summary = summary ? `${summary} ${note}` : note;
-    }
-
-    return {
-      statusCode: 200,
-      headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ changes, summary })
-    };
-  } catch (err) {
-    clearTimeout(abortTimer);
-    const isTimeout = err.name === "AbortError";
-    return {
-      statusCode: isTimeout ? 504 : 500,
-      headers: { ...baseHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: isTimeout ? "The AI took too long to respond. Please try again." : (err.message || "Unexpected server error.") })
-    };
+    resultJson = JSON.parse(cleaned);
+  } catch {
+    return json(502, { error: "The AI returned malformed JSON. Try again." });
   }
+
+  const rawChanges = Array.isArray(resultJson.changes) ? resultJson.changes : [];
+  let summary = typeof resultJson.summary === "string" ? resultJson.summary : "";
+
+  // Enforce the one-page constraint deterministically: drop any replacement
+  // longer than its original, since extra characters can push the resume to a
+  // second page.
+  const changes = [];
+  let droppedForLength = 0;
+  for (const change of rawChanges) {
+    const original = typeof change?.original === "string" ? change.original : "";
+    const replacement = typeof change?.replacement === "string" ? change.replacement : "";
+    if (replacement.length > original.length) {
+      droppedForLength += 1;
+      continue;
+    }
+    changes.push(change);
+  }
+  if (droppedForLength > 0) {
+    const note = `Filtered ${droppedForLength} suggested change(s) that would have exceeded the one-page limit.`;
+    summary = summary ? `${summary} ${note}` : note;
+  }
+
+  return json(200, { changes, summary });
 };

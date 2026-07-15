@@ -58,9 +58,9 @@
       margin-bottom: 8px;
     }
 
-    input, textarea, button { font: inherit; }
+    input, textarea, button, select { font: inherit; }
 
-    input, textarea {
+    input, textarea, select {
       width: 100%;
       border: 1px solid #c7d2e3;
       border-radius: 10px;
@@ -88,6 +88,11 @@
     .upload-zone.drag-over {
       border-color: #2563eb;
       background: #eff6ff;
+    }
+
+    .upload-zone.disabled {
+      opacity: 0.55;
+      pointer-events: none;
     }
 
     .upload-zone input[type="file"] {
@@ -159,40 +164,77 @@
 
     .settings-toggle:hover { background: #f3f4f6; color: #1f2937; }
 
-    /* File pill */
-    .file-pill {
-      display: inline-flex;
-      align-items: center;
+    /* Stored resume list */
+    .resume-list {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 12px;
+      display: grid;
       gap: 8px;
-      background: #eff6ff;
-      border: 1px solid #bfdbfe;
-      border-radius: 8px;
-      padding: 6px 12px;
-      font-size: 0.9rem;
-      color: #1d4ed8;
-      margin-top: 10px;
     }
 
-    .file-pill .saved-badge {
-      font-size: 0.78rem;
+    .resume-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border: 1px solid #dbe3ef;
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #f9fafb;
+    }
+
+    .resume-item.active {
+      border-color: #2563eb;
+      background: #eff6ff;
+    }
+
+    .resume-radio {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0;
+      font-weight: 400;
+      cursor: pointer;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .resume-radio input[type="radio"] {
+      width: auto;
+      border: 0;
+      padding: 0;
+      margin: 0;
+      flex: none;
+    }
+
+    .resume-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .resume-item .saved-badge {
+      font-size: 0.75rem;
       background: #dcfce7;
       color: #166534;
       border: 1px solid #bbf7d0;
       border-radius: 5px;
       padding: 1px 6px;
       font-weight: 700;
+      white-space: nowrap;
     }
 
-    .file-pill button {
+    .resume-delete {
       background: none;
       color: #6b7280;
-      padding: 0;
+      padding: 0 4px;
       font-size: 1rem;
       line-height: 1;
       font-weight: 400;
     }
 
-    .file-pill button:hover { color: #b91c1c; }
+    .resume-delete:hover { color: #b91c1c; }
 
     /* Output section */
     .output-header {
@@ -278,35 +320,40 @@
     <section class="intro">
       <div class="intro-text">
         <h1>ATS Resume Tailor</h1>
-        <p>Upload your <strong>.docx</strong> resume and paste a job description. The AI returns targeted edits — then download your tailored resume as a <strong>.docx</strong> file with all formatting preserved.</p>
+        <p>Store your <strong>.docx</strong> resumes, pick one, and paste a job description. The AI returns targeted edits — then download your tailored resume as a <strong>.docx</strong> file with all formatting preserved.</p>
       </div>
       <button class="settings-toggle" id="settingsToggle" type="button">&#9881; Settings</button>
     </section>
 
     <!-- Settings panel -->
-    <section class="card" id="settingsPanel" style="display:none;">
+    <section class="card stack" id="settingsPanel" style="display:none;">
       <div>
         <label for="apiUrl">Backend Endpoint (Netlify Function URL)</label>
         <input id="apiUrl" type="url" placeholder="https://your-site.netlify.app/.netlify/functions/analyze" />
         <p class="hint">Paste your Netlify function URL here once. It is saved in your browser.</p>
       </div>
+      <div>
+        <label for="model">AI Model</label>
+        <select id="model">
+          <option value="haiku">Fast — Claude Haiku 4.5 (recommended, most reliable)</option>
+          <option value="sonnet">Higher quality — Claude Sonnet 5 (a little slower)</option>
+        </select>
+        <p class="hint">Haiku is faster and far less likely to time out on Netlify's free tier. Switch to Sonnet for a higher-quality pass when you don't mind the occasional slower response.</p>
+      </div>
     </section>
 
-    <!-- Resume upload -->
+    <!-- Resume storage -->
     <section class="card stack">
       <div>
-        <label>Your Resume</label>
+        <label>Your Resumes <span style="font-weight:400;color:#6b7280;">(store up to 5 — select one to use)</span></label>
+        <ul id="resumeList" class="resume-list"></ul>
         <div class="upload-zone" id="uploadZone">
           <input type="file" id="resumeFile" accept=".docx" />
           <div class="upload-icon">&#128196;</div>
-          <div class="upload-label">Click or drag your .docx resume here</div>
-          <div class="upload-hint">.docx files only &mdash; your resume is automatically saved in this browser</div>
+          <div class="upload-label">Click or drag a .docx resume here</div>
+          <div class="upload-hint">.docx files only &mdash; saved in this browser. The selected resume is used for tailoring and cover letters.</div>
         </div>
-        <div id="filePill" style="display:none;" class="file-pill">
-          <span id="fileName"></span>
-          <span class="saved-badge" id="savedBadge" style="display:none;">Saved</span>
-          <button type="button" id="clearFile" title="Remove file">&#x2715;</button>
-        </div>
+        <p id="resumeLimitHint" class="hint" style="display:none;"></p>
       </div>
     </section>
 
@@ -373,21 +420,50 @@
     const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     const XML_NS = "http://www.w3.org/XML/1998/namespace";
 
+    const MAX_RESUMES = 5;
+
     const STORAGE_KEYS = {
-      apiUrl:      "resume-tuner-api-url",
-      coverLetter: "resume-tuner-cover-letter"
+      apiUrl:         "resume-tuner-api-url",
+      coverLetter:    "resume-tuner-cover-letter",
+      model:          "resume-tuner-model",
+      activeResumeId: "resume-tuner-active-resume"
     };
 
-    // ─── IndexedDB helper ────────────────────────────────────────────────────────
+    // ─── IndexedDB helper (multiple resumes) ─────────────────────────────────────
     const DB = {
       _db: null,
 
       open() {
         if (this._db) return Promise.resolve(this._db);
         return new Promise((resolve, reject) => {
-          const req = indexedDB.open("resume-tuner", 1);
+          const req = indexedDB.open("resume-tuner", 2);
           req.onupgradeneeded = (e) => {
-            e.target.result.createObjectStore("files");
+            const db = e.target.result;
+            const tx = e.target.transaction; // the versionchange transaction
+
+            if (!db.objectStoreNames.contains("resumes")) {
+              db.createObjectStore("resumes", { keyPath: "id" });
+            }
+
+            // Migrate the single-file record from v1 (object store "files",
+            // key "docx") into the new multi-resume store so existing users
+            // keep their saved resume.
+            if (db.objectStoreNames.contains("files")) {
+              const getReq = tx.objectStore("files").get("docx");
+              getReq.onsuccess = () => {
+                const old = getReq.result;
+                if (old && old.buffer) {
+                  tx.objectStore("resumes").put({
+                    id: "resume-legacy",
+                    name: old.name || "resume.docx",
+                    buffer: old.buffer,
+                    paragraphs: old.paragraphs || [],
+                    savedAt: 0
+                  });
+                }
+                db.deleteObjectStore("files");
+              };
+            }
           };
           req.onsuccess = (e) => {
             this._db = e.target.result;
@@ -397,32 +473,30 @@
         });
       },
 
-      async save(name, buffer, paragraphs) {
+      async getAll() {
         const db = await this.open();
         return new Promise((resolve, reject) => {
-          const tx = db.transaction("files", "readwrite");
-          tx.objectStore("files").put({ name, buffer, paragraphs }, "docx");
+          const req = db.transaction("resumes", "readonly").objectStore("resumes").getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+        });
+      },
+
+      async put(record) {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction("resumes", "readwrite");
+          tx.objectStore("resumes").put(record);
           tx.oncomplete = resolve;
           tx.onerror = () => reject(tx.error);
         });
       },
 
-      async load() {
+      async remove(id) {
         const db = await this.open();
         return new Promise((resolve, reject) => {
-          const req = db.transaction("files", "readonly")
-            .objectStore("files")
-            .get("docx");
-          req.onsuccess = () => resolve(req.result || null);
-          req.onerror = () => reject(req.error);
-        });
-      },
-
-      async clear() {
-        const db = await this.open();
-        return new Promise((resolve, reject) => {
-          const tx = db.transaction("files", "readwrite");
-          tx.objectStore("files").delete("docx");
+          const tx = db.transaction("resumes", "readwrite");
+          tx.objectStore("resumes").delete(id);
           tx.oncomplete = resolve;
           tx.onerror = () => reject(tx.error);
         });
@@ -430,23 +504,27 @@
     };
 
     // ─── State ───────────────────────────────────────────────────────────────────
+    let resumes = [];              // [{ id, name, buffer, paragraphs, savedAt }]
+    let activeResumeId = null;
+
+    // Derived from the active resume (kept in sync by setActiveResume) so the
+    // analyze / cover-letter / download code stays simple.
     let uploadMode = "none";       // 'none' | 'docx'
-    let docxBuffer = null;         // ArrayBuffer of the loaded .docx
-    let docxParagraphs = [];       // paragraph strings extracted from document.xml
-    let resumeFileName = "";       // original .docx filename (upload or restored from IndexedDB)
+    let docxBuffer = null;         // ArrayBuffer of the active .docx
+    let docxParagraphs = [];       // paragraph strings from the active document.xml
+    let resumeFileName = "";       // active .docx filename
     let lastChanges = [];
 
     // ─── Element refs ────────────────────────────────────────────────────────────
     const el = {
       apiUrl:              document.getElementById("apiUrl"),
+      model:               document.getElementById("model"),
       settingsToggle:      document.getElementById("settingsToggle"),
       settingsPanel:       document.getElementById("settingsPanel"),
       resumeFile:          document.getElementById("resumeFile"),
       uploadZone:          document.getElementById("uploadZone"),
-      filePill:            document.getElementById("filePill"),
-      fileName:            document.getElementById("fileName"),
-      savedBadge:          document.getElementById("savedBadge"),
-      clearFile:           document.getElementById("clearFile"),
+      resumeList:          document.getElementById("resumeList"),
+      resumeLimitHint:     document.getElementById("resumeLimitHint"),
       jd:                  document.getElementById("jd"),
       analyzeButton:       document.getElementById("analyzeButton"),
       clearOutputButton:   document.getElementById("clearOutputButton"),
@@ -469,28 +547,34 @@
     async function init() {
       el.apiUrl.value = localStorage.getItem(STORAGE_KEYS.apiUrl) || "";
       el.coverLetter.value = localStorage.getItem(STORAGE_KEYS.coverLetter) || "";
+      el.model.value = localStorage.getItem(STORAGE_KEYS.model) || "haiku";
+      activeResumeId = localStorage.getItem(STORAGE_KEYS.activeResumeId) || null;
 
       try {
-        const stored = await DB.load();
-        if (stored) {
-          docxBuffer = stored.buffer;
-          docxParagraphs = stored.paragraphs;
-          resumeFileName = stored.name || "";
-          uploadMode = "docx";
-          showFilePill(stored.name, true);
-          setStatus(`Restored "${stored.name}" from browser storage.`, "success");
+        resumes = await DB.getAll();
+        resumes.sort((a, b) => (a.savedAt || 0) - (b.savedAt || 0));
+
+        const validActive = resumes.some((r) => r.id === activeResumeId)
+          ? activeResumeId
+          : (resumes.length ? resumes[0].id : null);
+        setActiveResume(validActive);
+
+        if (resumes.length) {
+          const active = resumes.find((r) => r.id === activeResumeId);
+          if (active) setStatus(`Using saved resume "${active.name}".`, "success");
         }
       } catch {
-        // IndexedDB unavailable or empty — silent fail, user can re-upload
+        // IndexedDB unavailable — user can still upload for this session
+        renderResumeList();
       }
     }
 
     init();
 
-    // ─── Settings toggle ─────────────────────────────────────────────────────────
+    // ─── Settings ────────────────────────────────────────────────────────────────
     el.settingsToggle.addEventListener("click", () => {
       const isHidden = el.settingsPanel.style.display === "none";
-      el.settingsPanel.style.display = isHidden ? "block" : "none";
+      el.settingsPanel.style.display = isHidden ? "grid" : "none";
       el.settingsToggle.textContent = isHidden ? "✕ Close Settings" : "⚙ Settings";
     });
 
@@ -498,17 +582,23 @@
       localStorage.setItem(STORAGE_KEYS.apiUrl, el.apiUrl.value.trim());
     });
 
+    el.model.addEventListener("change", () => {
+      localStorage.setItem(STORAGE_KEYS.model, el.model.value);
+    });
+
     el.coverLetter.addEventListener("input", () => {
       localStorage.setItem(STORAGE_KEYS.coverLetter, el.coverLetter.value);
     });
+
+    function getSelectedModel() {
+      return el.model.value || "haiku";
+    }
 
     // ─── File upload ─────────────────────────────────────────────────────────────
     el.resumeFile.addEventListener("change", () => {
       const file = el.resumeFile.files[0];
       if (file) handleFileSelect(file);
     });
-
-    el.clearFile.addEventListener("click", resetFileUpload);
 
     el.uploadZone.addEventListener("dragover", (e) => {
       e.preventDefault();
@@ -542,6 +632,12 @@
 
     // ─── DOCX handling ───────────────────────────────────────────────────────────
     async function handleDocxFile(file) {
+      if (resumes.length >= MAX_RESUMES) {
+        setStatus(`You can store up to ${MAX_RESUMES} resumes. Remove one to add another.`, "error");
+        el.resumeFile.value = "";
+        return;
+      }
+
       setStatus("Reading .docx file...");
       try {
         const arrayBuffer = await file.arrayBuffer();
@@ -557,45 +653,119 @@
             .join("")
         );
 
-        docxBuffer = arrayBuffer;
-        docxParagraphs = paragraphs;
-        resumeFileName = file.name;
-        uploadMode = "docx";
+        const record = {
+          id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : "resume-" + Date.now(),
+          name: file.name,
+          buffer: arrayBuffer,
+          paragraphs,
+          savedAt: Date.now()
+        };
 
-        // Persist to IndexedDB automatically
-        await DB.save(file.name, arrayBuffer, paragraphs);
+        await DB.put(record);
+        resumes.push(record);
+        setActiveResume(record.id); // persists, updates derived state, re-renders
 
-        showFilePill(file.name, true);
         setStatus(
-          `Loaded ${paragraphs.length} paragraphs from "${file.name}" — saved to browser.`,
+          `Saved "${file.name}" — ${paragraphs.length} paragraphs. It is now selected.`,
           "success"
         );
       } catch (err) {
-        resetFileUpload();
         setStatus("Could not read the .docx file. Make sure it is a valid Word document.", "error");
         console.error(err);
+      } finally {
+        el.resumeFile.value = "";
       }
     }
 
-    function showFilePill(name, showSaved = false) {
-      el.fileName.textContent = name;
-      el.savedBadge.style.display = showSaved ? "inline" : "none";
-      el.filePill.style.display = "inline-flex";
+    // ─── Resume list management ──────────────────────────────────────────────────
+    function applyActiveResume() {
+      const active = resumes.find((r) => r.id === activeResumeId) || null;
+      if (active) {
+        docxBuffer = active.buffer;
+        docxParagraphs = active.paragraphs;
+        resumeFileName = active.name;
+        uploadMode = "docx";
+      } else {
+        docxBuffer = null;
+        docxParagraphs = [];
+        resumeFileName = "";
+        uploadMode = "none";
+      }
     }
 
-    async function resetFileUpload() {
-      docxBuffer = null;
-      docxParagraphs = [];
-      resumeFileName = "";
-      uploadMode = "none";
-      el.resumeFile.value = "";
-      el.filePill.style.display = "none";
-      setStatus("");
+    function setActiveResume(id) {
+      activeResumeId = id;
+      if (id) localStorage.setItem(STORAGE_KEYS.activeResumeId, id);
+      else localStorage.removeItem(STORAGE_KEYS.activeResumeId);
+      applyActiveResume();
+      renderResumeList();
+    }
+
+    async function deleteResume(id) {
       try {
-        await DB.clear();
+        await DB.remove(id);
       } catch {
-        // Ignore — state is already cleared in memory
+        // Ignore — still remove from the in-memory list
       }
+      resumes = resumes.filter((r) => r.id !== id);
+      if (activeResumeId === id) {
+        setActiveResume(resumes.length ? resumes[0].id : null);
+      } else {
+        renderResumeList();
+      }
+    }
+
+    function renderResumeList() {
+      el.resumeList.innerHTML = "";
+
+      for (const r of resumes) {
+        const li = document.createElement("li");
+        li.className = "resume-item" + (r.id === activeResumeId ? " active" : "");
+
+        const label = document.createElement("label");
+        label.className = "resume-radio";
+
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = "activeResume";
+        radio.value = r.id;
+        radio.checked = r.id === activeResumeId;
+        radio.addEventListener("change", () => setActiveResume(r.id));
+
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "resume-name";
+        nameSpan.textContent = r.name;
+
+        label.appendChild(radio);
+        label.appendChild(nameSpan);
+
+        if (r.id === activeResumeId) {
+          const badge = document.createElement("span");
+          badge.className = "saved-badge";
+          badge.textContent = "Active";
+          label.appendChild(badge);
+        }
+
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "resume-delete";
+        del.title = "Remove resume";
+        del.innerHTML = "&#x2715;";
+        del.addEventListener("click", () => deleteResume(r.id));
+
+        li.appendChild(label);
+        li.appendChild(del);
+        el.resumeList.appendChild(li);
+      }
+
+      // Cap handling — block adding beyond MAX_RESUMES.
+      const atCap = resumes.length >= MAX_RESUMES;
+      el.resumeFile.disabled = atCap;
+      el.uploadZone.classList.toggle("disabled", atCap);
+      el.resumeLimitHint.style.display = atCap ? "block" : "none";
+      el.resumeLimitHint.textContent = atCap
+        ? `Maximum of ${MAX_RESUMES} resumes stored. Remove one to add another.`
+        : "";
     }
 
     // ─── Analyze ─────────────────────────────────────────────────────────────────
@@ -608,13 +778,12 @@
 
       if (!apiUrl) {
         setStatus("Open Settings (top right) and paste your Netlify function URL.", "error");
-        el.settingsPanel.style.display = "block";
-        el.settingsToggle.textContent = "✕ Close Settings";
+        openSettings();
         return;
       }
 
       if (uploadMode !== "docx" || !docxBuffer) {
-        setStatus("Upload a .docx resume before analyzing.", "error");
+        setStatus("Add or select a .docx resume before analyzing.", "error");
         return;
       }
 
@@ -632,7 +801,12 @@
         const response = await fetch(apiUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paragraphs: docxParagraphs, jd, instructions: el.instructions.value.trim() })
+          body: JSON.stringify({
+            paragraphs: docxParagraphs,
+            jd,
+            instructions: el.instructions.value.trim(),
+            model: getSelectedModel()
+          })
         });
 
         const data = await response.json();
@@ -776,8 +950,7 @@
 
       if (!apiUrl) {
         setCoverStatus("Open Settings (top right) and paste your Netlify function URL.", "error");
-        el.settingsPanel.style.display = "block";
-        el.settingsToggle.textContent = "✕ Close Settings";
+        openSettings();
         return;
       }
 
@@ -803,7 +976,8 @@
             coverLetter,
             jd,
             paragraphs: docxParagraphs,
-            instructions: el.coverInstructions.value.trim()
+            instructions: el.coverInstructions.value.trim(),
+            model: getSelectedModel()
           })
         });
 
@@ -824,6 +998,11 @@
     }
 
     // ─── Utilities ───────────────────────────────────────────────────────────────
+    function openSettings() {
+      el.settingsPanel.style.display = "grid";
+      el.settingsToggle.textContent = "✕ Close Settings";
+    }
+
     function setStatus(message, type = "") {
       el.status.textContent = message;
       el.status.className = type;
