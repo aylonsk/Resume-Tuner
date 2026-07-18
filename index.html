@@ -150,6 +150,17 @@
     #status.error { color: #b91c1c; }
     #status.success { color: #047857; }
 
+    /* Upload feedback — shown at the resume card, next to the upload zone */
+    #uploadStatus {
+      min-height: 22px;
+      font-weight: 700;
+      margin-top: 10px;
+    }
+
+    #uploadStatus:empty { min-height: 0; margin-top: 0; }
+    #uploadStatus.error { color: #b91c1c; }
+    #uploadStatus.success { color: #047857; }
+
     /* Settings panel */
     .settings-toggle {
       background: none;
@@ -353,6 +364,7 @@
           <div class="upload-label">Click or drag a .docx resume here</div>
           <div class="upload-hint">.docx files only &mdash; saved in this browser. The selected resume is used for tailoring and cover letters.</div>
         </div>
+        <div id="uploadStatus" aria-live="polite"></div>
         <p id="resumeLimitHint" class="hint" style="display:none;"></p>
       </div>
     </section>
@@ -525,6 +537,7 @@
       uploadZone:          document.getElementById("uploadZone"),
       resumeList:          document.getElementById("resumeList"),
       resumeLimitHint:     document.getElementById("resumeLimitHint"),
+      uploadStatus:        document.getElementById("uploadStatus"),
       jd:                  document.getElementById("jd"),
       analyzeButton:       document.getElementById("analyzeButton"),
       clearOutputButton:   document.getElementById("clearOutputButton"),
@@ -561,7 +574,7 @@
 
         if (resumes.length) {
           const active = resumes.find((r) => r.id === activeResumeId);
-          if (active) setStatus(`Using saved resume "${active.name}".`, "success");
+          if (active) setUploadStatus(`Using saved resume "${active.name}".`, "success");
         }
       } catch {
         // IndexedDB unavailable — user can still upload for this session
@@ -614,7 +627,7 @@
       if (file) {
         handleFileSelect(file);
       } else {
-        setStatus("Could not read the dropped file.", "error");
+        setUploadStatus("Could not read the dropped file.", "error");
       }
     });
 
@@ -626,25 +639,29 @@
       if (isDocx) {
         handleDocxFile(file);
       } else {
-        setStatus("Please upload a .docx file.", "error");
+        setUploadStatus("That is not a .docx file. Please upload a Word .docx resume (not .pdf or .doc).", "error");
       }
     }
 
     // ─── DOCX handling ───────────────────────────────────────────────────────────
     async function handleDocxFile(file) {
       if (resumes.length >= MAX_RESUMES) {
-        setStatus(`You can store up to ${MAX_RESUMES} resumes. Remove one to add another.`, "error");
+        setUploadStatus(`You can store up to ${MAX_RESUMES} resumes. Remove one to add another.`, "error");
         el.resumeFile.value = "";
         return;
       }
 
-      setStatus("Reading .docx file...");
+      setUploadStatus("Reading .docx file...");
+
+      // Step 1 — parse the .docx. A failure here means the file itself is bad.
+      let record;
       try {
         const arrayBuffer = await file.arrayBuffer();
 
         const zip = new PizZip(arrayBuffer);
-        const xmlText = zip.file("word/document.xml").asText();
-        const xmlDoc = new DOMParser().parseFromString(xmlText, "application/xml");
+        const docXml = zip.file("word/document.xml");
+        if (!docXml) throw new Error("word/document.xml not found — not a valid .docx");
+        const xmlDoc = new DOMParser().parseFromString(docXml.asText(), "application/xml");
 
         const paras = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "p"));
         const paragraphs = paras.map((p) =>
@@ -653,27 +670,40 @@
             .join("")
         );
 
-        const record = {
+        record = {
           id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : "resume-" + Date.now(),
           name: file.name,
           buffer: arrayBuffer,
           paragraphs,
           savedAt: Date.now()
         };
+      } catch (err) {
+        console.error(err);
+        setUploadStatus("Could not read that file. Make sure it is a valid Word .docx (not .pdf or .doc), then try again.", "error");
+        el.resumeFile.value = "";
+        return;
+      }
 
+      // Step 2 — add to the session immediately so the resume is usable and
+      // visibly appears in the list, even if browser storage is blocked.
+      resumes.push(record);
+      setActiveResume(record.id); // updates derived state + re-renders the list
+      el.resumeFile.value = "";
+
+      // Step 3 — persist. If storage is unavailable (private mode, disabled),
+      // keep the resume for this session and say so, rather than failing.
+      try {
         await DB.put(record);
-        resumes.push(record);
-        setActiveResume(record.id); // persists, updates derived state, re-renders
-
-        setStatus(
-          `Saved "${file.name}" — ${paragraphs.length} paragraphs. It is now selected.`,
+        setUploadStatus(
+          `Saved "${record.name}" — ${record.paragraphs.length} paragraphs. It is now selected.`,
           "success"
         );
       } catch (err) {
-        setStatus("Could not read the .docx file. Make sure it is a valid Word document.", "error");
         console.error(err);
-      } finally {
-        el.resumeFile.value = "";
+        setUploadStatus(
+          `Loaded "${record.name}" for this session, but it could not be saved to browser storage — it won't persist after you close this tab.`,
+          "error"
+        );
       }
     }
 
@@ -1006,6 +1036,13 @@
     function setStatus(message, type = "") {
       el.status.textContent = message;
       el.status.className = type;
+    }
+
+    // Upload feedback lives in the resume card, right next to the upload zone,
+    // so success and (especially) errors are visible where the user is looking.
+    function setUploadStatus(message, type = "") {
+      el.uploadStatus.textContent = message;
+      el.uploadStatus.className = type;
     }
 
     function setCoverStatus(message, type = "") {
